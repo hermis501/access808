@@ -75,6 +75,12 @@ Glide Mode is set to "Legato (overlap)" by default. If a new note starts while
 the previous note is still held, the pitch slides to the new note. Notes that
 don't overlap are fresh hits.
 
+Glide Mode "Always (also from the release tail)" slides even when the notes
+don't overlap, as long as the previous note is still sounding in its release.
+Each such note is a new hit that starts at the previous pitch and slides to its
+own, so a whole line slides without any overlap editing. This is handy in DAWs
+without the scripts. After silence, a note starts on its own pitch.
+
 You don't need to edit note lengths by hand. Use the scripts instead:
 
 - **Access808 - Slide selected notes into next note:** select notes, run it,
@@ -124,6 +130,19 @@ Other glide controls:
   rather than loudness. The default Output Level is -2 dB.
 - Stereo Width spreads only the harmonics above the fundamental. The sub stays
   in mono, so the 808 stays solid on club systems and phones.
+- Harmonics (in Tone) adds clean overtones, an octave, an octave and a fifth,
+  and two octaves above the note, without distortion. Phones and laptops can't
+  play the deep fundamental, so this is how a clean 808 stays audible on them.
+  It also makes the 808 louder, so check Output Level.
+- Pitch Drop Curve shapes the punch: 0% is a fast exponential snap (the
+  default), 50% an even linear fall, and 100% holds the high pitch longer and
+  then bends down, for a rounder, boomier hit.
+- Velocity to Pitch Drop (in Playing): at 100%, soft notes get almost no drop
+  and hard notes the full drop, so accented hits punch harder.
+- Decay Sync sets the decay as a note length that follows the tempo, from a
+  1/16 note to 2 bars, so the tail fits the groove at any tempo. While it is
+  on, Decay's value ends with "(inactive, Decay Sync is on)". A bar is four
+  beats.
 
 ## Kick ducking
 
@@ -139,7 +158,7 @@ threshold that is too high.
 
 ## Using it with OSARA
 
-All 45 controls are host parameters with plain names and values in units, so
+All 50 controls are host parameters with plain names and values in units, so
 the whole synth can be played and automated from OSARA's FX parameter list.
 Names start with their group, for example Glide, Pitch Drop, Click, Vibrato,
 Velocity and Duck. The parameters are also grouped into sections (Glide,

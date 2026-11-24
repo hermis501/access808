@@ -110,12 +110,12 @@ private:
     struct RawParams
     {
         std::atomic<float> *glideMode, *glideTime, *glideSync, *glideTiming, *glideCurve, *slideRetrigger, *notePriority,
-                           *tune, *fine, *tuningRef, *pitchDrop, *pitchDropTime,
-                           *attack, *hold, *decay, *decayCurve, *sustain, *release, *phaseReset,
-                           *waveShape, *subLevel, *clickType, *clickLevel, *clickTone, *clickFollowsAttack,
+                           *tune, *fine, *tuningRef, *pitchDrop, *pitchDropTime, *pitchDropCurve,
+                           *attack, *hold, *decay, *decaySync, *decayCurve, *sustain, *release, *phaseReset,
+                           *waveShape, *harmonics, *subLevel, *clickType, *clickLevel, *clickTone, *clickFollowsAttack,
                            *saturationType, *drive, *driveCompensation, *saturationMix, *oversampling, *cutoff, *resonance,
                            *vibratoRate, *vibratoDepth, *vibratoDelay, *drift,
-                           *velocitySens, *velocityToDrive, *velocityToClick, *bendRange,
+                           *velocitySens, *velocityToDrive, *velocityToClick, *velocityToPitchDrop, *bendRange,
                            *stereoWidth, *duckAmount, *duckThreshold, *duckRelease, *output;
     } raw;
 

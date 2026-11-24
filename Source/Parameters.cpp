@@ -78,6 +78,30 @@ namespace
             .withValueFromStringFunction ([] (const juce::String& s) { return parseNumber (s); });
     }
 
+    // 0% exponential, 50% linear, 100% held: Decay Curve and Pitch Drop Curve.
+    Attr curveAttr()
+    {
+        return Attr().withLabel ("%")
+            .withStringFromValueFunction ([] (float v, int)
+            {
+                const int pc = juce::roundToInt (v * 100.0f);
+                juce::String s (pc);
+                s << "%";
+                if (pc == 0)   s << " (exponential)";
+                if (pc == 50)  s << " (linear)";
+                if (pc == 100) s << " (held)";
+                return s;
+            })
+            .withValueFromStringFunction ([] (const juce::String& s)
+            {
+                const auto t = s.toLowerCase();
+                if (t.contains ("exp"))  return 0.0f;
+                if (t.contains ("lin"))  return 0.5f;
+                if (t.contains ("held")) return 1.0f;
+                return parseNumber (s) / 100.0f;
+            });
+    }
+
     juce::NormalisableRange<float> skewed (float lo, float hi, float centre, float interval = 0.0f)
     {
         juce::NormalisableRange<float> r (lo, hi, interval);
@@ -132,7 +156,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
             return s;
         });
 
-        g->addChild (choice (ids::glideMode, "Glide Mode", { "Off", "Legato (overlap)" }, 1));
+        g->addChild (choice (ids::glideMode, "Glide Mode", { "Off", "Legato (overlap)", "Always (also from the release tail)" }, 1));
         g->addChild (std::make_unique<Float> (pid (ids::glideTime), "Glide Time",
                                              skewed (0.0f, 2000.0f, 150.0f, 1.0f), 80.0f, timeAttr));
         g->addChild (std::move (sync));
@@ -157,6 +181,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
                                              unitAttr ("semitones", 1)));
         g->addChild (std::make_unique<Float> (pid (ids::pitchDropTime), "Pitch Drop Time",
                                              skewed (1.0f, 500.0f, 50.0f, 0.1f), 40.0f, msAttr()));
+        g->addChild (std::make_unique<Float> (pid (ids::pitchDropCurve), "Pitch Drop Curve", linear (0.0f, 1.0f, 0.01f), 0.0f,
+                                             curveAttr()));
         layout.add (std::move (g));
     }
 
@@ -165,27 +191,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         auto g = group ("envelope", "Amp Envelope");
         g->addChild (std::make_unique<Float> (pid (ids::attack), "Attack", skewed (0.0f, 200.0f, 10.0f, 0.1f), 1.0f, msAttr()));
         g->addChild (std::make_unique<Float> (pid (ids::hold), "Hold", skewed (0.0f, 2000.0f, 200.0f, 1.0f), 0.0f, msAttr()));
-        g->addChild (std::make_unique<Float> (pid (ids::decay), "Decay", skewed (10.0f, 10000.0f, 1000.0f, 1.0f), 1500.0f, msAttr()));
-        g->addChild (std::make_unique<Float> (pid (ids::decayCurve), "Decay Curve", linear (0.0f, 1.0f, 0.01f), 0.0f,
-                                             Attr().withLabel ("%")
-                                                 .withStringFromValueFunction ([] (float v, int)
-                                                 {
-                                                     const int pc = juce::roundToInt (v * 100.0f);
-                                                     juce::String s (pc);
-                                                     s << "%";
-                                                     if (pc == 0)   s << " (exponential)";
-                                                     if (pc == 50)  s << " (linear)";
-                                                     if (pc == 100) s << " (held)";
-                                                     return s;
-                                                 })
-                                                 .withValueFromStringFunction ([] (const juce::String& s)
-                                                 {
-                                                     const auto t = s.toLowerCase();
-                                                     if (t.contains ("exp"))  return 0.0f;
-                                                     if (t.contains ("lin"))  return 0.5f;
-                                                     if (t.contains ("held")) return 1.0f;
-                                                     return parseNumber (s) / 100.0f;
-                                                 })));
+        // Decay Sync is made first so Decay's text can say when it is inactive.
+        auto sync = choice (ids::decaySync, "Decay Sync",
+                            { "Off (use Decay)", "1/16 note", "1/8 note", "1/8 dotted", "1/4 note", "1/4 dotted",
+                              "1/2 note", "1/2 dotted", "1 bar", "2 bars" }, 0);
+        auto* syncParam = sync.get();
+        auto decayAttr = msAttr();
+        auto msText = decayAttr.getStringFromValueFunction();
+        decayAttr = decayAttr.withStringFromValueFunction ([msText, syncParam] (float v, int len)
+        {
+            auto s = msText (v, len);
+            if (syncParam->getIndex() > 0)
+                s << " (inactive, Decay Sync is on)";
+            return s;
+        });
+
+        g->addChild (std::make_unique<Float> (pid (ids::decay), "Decay", skewed (10.0f, 10000.0f, 1000.0f, 1.0f), 1500.0f, decayAttr));
+        g->addChild (std::move (sync));
+        g->addChild (std::make_unique<Float> (pid (ids::decayCurve), "Decay Curve", linear (0.0f, 1.0f, 0.01f), 0.0f, curveAttr()));
         g->addChild (percent (ids::sustain, "Sustain", 0.5f));
         g->addChild (std::make_unique<Float> (pid (ids::release), "Release", skewed (5.0f, 5000.0f, 300.0f, 1.0f), 250.0f, msAttr()));
         g->addChild (choice (ids::phaseReset, "Hit Consistency",
@@ -197,6 +220,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
     {
         auto g = group ("tone", "Tone");
         g->addChild (percent (ids::waveShape, "Wave Shape (sine to triangle)", 0.0f));
+        g->addChild (percent (ids::harmonics, "Harmonics", 0.0f));
         g->addChild (percent (ids::subLevel, "Sub Octave Level", 0.0f));
         g->addChild (choice (ids::clickType, "Click Type", { "Noise", "Tick", "Knock" }, 0));
         g->addChild (percent (ids::clickLevel, "Click Level", 0.3f));
@@ -240,6 +264,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
         g->addChild (percent (ids::velocitySens, "Velocity to Level", 0.5f));
         g->addChild (percent (ids::velocityToDrive, "Velocity to Drive", 0.0f));
         g->addChild (percent (ids::velocityToClick, "Velocity to Click", 0.0f));
+        g->addChild (percent (ids::velocityToPitchDrop, "Velocity to Pitch Drop", 0.0f));
         g->addChild (std::make_unique<Float> (pid (ids::bendRange), "Pitch Bend Range", linear (0.0f, 24.0f, 1.0f), 12.0f,
                                              unitAttr ("semitones", 0)));
         layout.add (std::move (g));
@@ -265,7 +290,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 juce::String getParameterHelp (const juce::String& id)
 {
     static const std::map<juce::String, juce::String> help {
-        { ids::glideMode,         "Legato: a note that starts while the previous note is still held slides to the new pitch. Off: every note is a new hit." },
+        { ids::glideMode,         "Legato: a note that starts while the previous note is still held slides to the new pitch. Always: also slides when the previous note is released but still sounding, so whole lines slide without overlapping notes; a new hit then also restarts the volume. Off: every note is a new hit." },
         { ids::glideTime,         "How long a slide takes. Inactive when Glide Sync is set to a note length; the value then says so." },
         { ids::glideSync,         "Sets the slide time as a note length that follows the project tempo." },
         { ids::glideTiming,       "Same time: every slide takes the glide time. Time per octave: bigger intervals take longer." },
@@ -277,14 +302,17 @@ juce::String getParameterHelp (const juce::String& id)
         { ids::tuningRef,         "Frequency of A above middle C. Standard is 440 hertz." },
         { ids::pitchDrop,         "How far above the note each new hit starts, for punch." },
         { ids::pitchDropTime,     "How quickly the punch pitch falls to the note." },
+        { ids::pitchDropCurve,    "Shape of the punch. Zero percent is a fast exponential snap, fifty is an even linear fall, one hundred holds the high pitch longer, then bends down, for a rounder, boomier hit." },
         { ids::attack,            "Fade-in time of each new hit." },
         { ids::hold,              "Time at full level before the decay starts." },
-        { ids::decay,             "Time to fall from full level to the sustain level." },
+        { ids::decay,             "Time to fall from full level to the sustain level. Inactive when Decay Sync is set to a note length; the value then says so." },
+        { ids::decaySync,         "Sets the decay as a note length that follows the project tempo, so the 808 tail fits the groove at any tempo. A bar is four beats." },
         { ids::decayCurve,        "Shape of the decay. Zero percent is exponential like a classic 808, fifty is linear, one hundred holds the level longer, then falls." },
         { ids::sustain,           "Level held while the key is down. Zero gives a pure decaying 808." },
         { ids::release,           "Fade-out time after the key is released." },
         { ids::phaseReset,        "Natural: a new hit while the 808 still sounds continues the waveform, like a real 808. Identical every hit: every hit starts the waveform from zero for the same punch each time, crossfading the old hit to avoid clicks." },
         { ids::waveShape,         "Zero percent is a pure sine. Higher adds triangle harmonics, which carry better on small speakers." },
+        { ids::harmonics,         "Adds clean overtones above the note, without distortion, so the 808 is heard on phones and laptops that cannot play the deep fundamental." },
         { ids::subLevel,          "Adds a sine one octave below." },
         { ids::clickType,         "Noise is a short burst, tick is a high blip, knock is a woody thump." },
         { ids::clickLevel,        "Level of the attack click on new hits." },
@@ -304,6 +332,7 @@ juce::String getParameterHelp (const juce::String& id)
         { ids::velocitySens,      "How much note velocity changes loudness. Zero ignores velocity." },
         { ids::velocityToDrive,   "At full velocity the drive is as set. Softer notes get up to 18 decibels less drive." },
         { ids::velocityToClick,   "How much note velocity changes the click level." },
+        { ids::velocityToPitchDrop, "How much note velocity changes the pitch drop. At one hundred percent, soft notes get almost no drop and hard notes the full drop." },
         { ids::bendRange,         "Pitch wheel range in semitones, up and down." },
         { ids::stereoWidth,       "Widens the upper harmonics. The sub always stays mono, and the sound stays safe in mono." },
         { ids::duckAmount,        "How much the 808 ducks when the kick hits. Send the kick track to this track to use it." },

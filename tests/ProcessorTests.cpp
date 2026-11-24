@@ -191,6 +191,36 @@ TEST_CASE ("State and factory presets round-trip")
     REQUIRE (q->presets.getCurrentName() == p->presets.getCurrentName());
 }
 
+TEST_CASE ("Decay Sync sets the decay as a note length at the tempo")
+{
+    // No play head in the test, so the tempo is the 120 BPM fallback: a 1/8
+    // note is 250 ms. With sustain 0 the note is silent soon after that.
+    auto tailRms = [] (int decaySyncIndex)
+    {
+        auto p = makeProcessor();
+        setParam (*p, ids::sustain, 0.0f);
+        setParam (*p, ids::decay, 3000.0f);
+        setParam (*p, ids::decaySync, (float) decaySyncIndex);
+        const auto r = play (*p, 0.5f, 36, false, 0);
+        Result tail;
+        const auto from = r.left.size() - (size_t) (0.1 * sr); // the last 100 ms, from 400 ms on
+        tail.left.assign (r.left.begin() + (long) from, r.left.end());
+        tail.right = tail.left;
+        return tail.rms();
+    };
+
+    REQUIRE (tailRms (2) < 0.001f);            // 1/8 note: decayed
+    REQUIRE (tailRms (0) > 0.05f);             // off: the 3 s decay is still loud
+    REQUIRE (tailRms (2) < tailRms (0) * 0.01f);
+
+    // Decay's value text says when Decay Sync replaces it.
+    auto p = makeProcessor();
+    auto* decay = p->apvts.getParameter (ids::decay);
+    REQUIRE_FALSE (decay->getCurrentValueAsText().contains ("inactive"));
+    setParam (*p, ids::decaySync, 4.0f);
+    REQUIRE (decay->getCurrentValueAsText().contains ("inactive, Decay Sync is on"));
+}
+
 TEST_CASE ("User presets save over, export and import without overwriting")
 {
     // A throwaway user folder, so the real presets are never touched.

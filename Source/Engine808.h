@@ -1,8 +1,9 @@
 #pragma once
 
-// Monophonic 808 voice: note stack with priority, legato glide, pitch-drop
-// "punch", AHDSR amp envelope with curve, sine/triangle oscillator, sub
-// octave, click transient, vibrato and analog drift.
+// Monophonic 808 voice: note stack with priority, legato or always glide,
+// pitch-drop "punch" with curve and velocity, AHDSR amp envelope with curve,
+// sine/triangle oscillator with clean harmonics, sub octave, click transient,
+// vibrato and analog drift.
 //
 // Deliberately free of JUCE so it can be unit tested in isolation
 // (tests/EngineTests.cpp). Saturation, filter, width, ducking and output gain
@@ -16,7 +17,9 @@
 namespace access808
 {
 
-enum class GlideMode      { off = 0, legato = 1 };
+// legato: slide only when the new note overlaps a held one. always: also slide
+// from a note that is released but still sounding (its release tail).
+enum class GlideMode      { off = 0, legato = 1, always = 2 };
 enum class GlideCurve     { linear = 0, exponential = 1 };
 enum class GlideTiming    { constantTime = 0, perOctave = 1 };
 enum class SlideRetrigger { off = 0, punch = 1, punchAndEnvelope = 2 };
@@ -40,6 +43,7 @@ struct EngineParams
     float tuningRefHz      = 440.0f;  // frequency of A4
     float pitchDropSemis   = 12.0f;   // each hit starts this far above the note...
     float pitchDropMs      = 40.0f;   // ...and falls to it over roughly this time
+    float pitchDropCurve   = 0.0f;    // 0 exponential snap, 0.5 linear, 1 held then bends
     float attackMs         = 1.0f;
     float holdMs           = 0.0f;
     float decayMs          = 1500.0f; // time from full level to the sustain level
@@ -47,12 +51,14 @@ struct EngineParams
     float sustain          = 0.5f;    // 0..1
     float releaseMs        = 250.0f;  // time to silence
     float waveShape        = 0.0f;    // 0 sine, 1 triangle
+    float harmonics        = 0.0f;    // 0..1, clean 2nd, 3rd and 4th harmonics
     float subLevel         = 0.0f;    // 0..1, sine one octave down
     float clickLevel       = 0.3f;    // 0..1
     float clickTone        = 0.5f;    // 0..1, dark..bright
     bool  clickFollowsAttack = true;  // a slow attack softens the click too
     float velocitySens     = 0.5f;    // 0..1, velocity to loudness
     float velocityToClick  = 0.0f;    // 0..1
+    float velocityToPitchDrop = 0.0f; // 0..1: softer hits get a smaller pitch drop
     float bendRangeSemis   = 12.0f;
     float vibratoRateHz    = 5.0f;
     float vibratoCents     = 0.0f;    // depth, 0 = off
@@ -89,7 +95,9 @@ public:
         phase = subPhase = 0.0;
         glideActive = false;
         clickEnv = 0.0f;
-        pitchDropEnv = 0.0f;
+        pitchDropEnv = dropExp = 0.0f;
+        dropPos = 2.0f;
+        dropScale = 1.0f;
         bendTarget = bendSmoothed = 0.0f;
         fade = {};
         firstRender = true;
@@ -126,7 +134,15 @@ public:
 
         if (! gateWasOn)
         {
+            // Always: a new hit still slides from a note that is fading out.
+            const bool slideFromTail = params.glideMode == GlideMode::always && stage != Stage::idle;
+            const float fromPitch = currentPitch;
             trigger (target, velocity01);
+            if (slideFromTail)
+            {
+                currentPitch = fromPitch;
+                startGlide (target);
+            }
             return;
         }
 
@@ -143,7 +159,7 @@ public:
 
         if (params.slideRetrigger != SlideRetrigger::off)
         {
-            pitchDropEnv = 1.0f;
+            startPitchDrop (velocity01);
             startClick (velocity01);
         }
         if (params.slideRetrigger == SlideRetrigger::punchAndEnvelope)
@@ -206,12 +222,16 @@ public:
         {
             tuneSmoothed  = params.tuneSemis + params.fineCents * 0.01f;
             shapeSmoothed = params.waveShape;
+            harmSmoothed  = params.harmonics;
             subSmoothed   = params.subLevel;
             sustainSmoothed = params.sustain;
             firstRender = false;
         }
 
         const float dropCoef   = std::exp (-6.9078f / (std::max (params.pitchDropMs, 0.1f) * 0.001f * sr));
+        const float dropInc    = 1.0f / (std::max (params.pitchDropMs, 0.1f) * 0.001f * sr);
+        const float dropCurve  = std::clamp (params.pitchDropCurve, 0.0f, 1.0f);
+        const float harmTarget = std::clamp (params.harmonics, 0.0f, 1.0f);
         const float attackInc  = params.attackMs > 0.0f ? 1.0f / (params.attackMs * 0.001f * sr) : 1.0f;
         const float softRampInc = std::min (attackInc, 1.0f / (minRetriggerRampMs * 0.001f * sr));
         const float decayInc   = 1.0f / (std::max (params.decayMs, 1.0f) * 0.001f * sr);
@@ -242,6 +262,7 @@ public:
             // ---- smoothed controls ----
             tuneSmoothed    = tuneTarget    + (tuneSmoothed    - tuneTarget)    * smoothCoef;
             shapeSmoothed   = shapeTarget   + (shapeSmoothed   - shapeTarget)   * smoothCoef;
+            harmSmoothed    = harmTarget    + (harmSmoothed    - harmTarget)    * smoothCoef;
             subSmoothed     = params.subLevel + (subSmoothed   - params.subLevel) * smoothCoef;
             sustainSmoothed = sustainTarget + (sustainSmoothed - sustainTarget) * smoothCoef;
             bendSmoothed    = bendTarget    + (bendSmoothed    - bendTarget)    * bendCoef;
@@ -261,7 +282,11 @@ public:
                 }
             }
 
-            pitchDropEnv *= dropCoef;
+            // Pitch drop. At curve 0 this is the plain exponential fall
+            // (dropExp), exactly as before the curve existed.
+            dropExp *= dropCoef;
+            dropPos = std::min (dropPos + dropInc, 2.0f);
+            pitchDropEnv = dropCurve <= 0.0f ? dropExp : dropShape (dropExp, dropPos, dropCurve);
 
             // vibrato
             float vib = 0.0f;
@@ -288,14 +313,14 @@ public:
             const float driftSemis = params.drift * (driftValue * maxDriftCents + noteDriftCents) * 0.01f;
 
             const float pitch = currentPitch + tuneSmoothed + vib + driftSemis
-                              + pitchDropEnv * params.pitchDropSemis
+                              + pitchDropEnv * params.pitchDropSemis * dropScale
                               + bendSmoothed * params.bendRangeSemis;
             const double freq = std::min ((double) params.tuningRefHz * std::exp2 ((pitch - 69.0f) / 12.0),
                                           sampleRate * 0.45);
             lastFreq = freq;
 
             // ---- main oscillator ----
-            float osc = oscillator (phase, subPhase, shapeSmoothed, subSmoothed);
+            float osc = oscillator (phase, subPhase, shapeSmoothed, harmSmoothed, subSmoothed);
             advance (phase, subPhase, freq);
 
             // ---- envelope ----
@@ -337,7 +362,7 @@ public:
             // ---- crossfade out of the previous hit (phase reset) ----
             if (fade.active)
             {
-                sample += oscillator (fade.phase, fade.subPhase, shapeSmoothed, subSmoothed) * fade.level * fade.gain;
+                sample += oscillator (fade.phase, fade.subPhase, shapeSmoothed, harmSmoothed, subSmoothed) * fade.level * fade.gain;
                 advance (fade.phase, fade.subPhase, fade.freq);
                 fade.gain -= fadeDec;
                 if (fade.gain <= 0.0f) fade.active = false;
@@ -385,12 +410,41 @@ private:
 
     bool isGateOn() const { return stage != Stage::idle && stage != Stage::release; }
 
-    static float oscillator (double ph, double subPh, float shape, float sub)
+    // Relative levels of the clean harmonics at Harmonics 100%. They start at
+    // zero phase with the fundamental, so a hit from silence stays click-free.
+    static constexpr float harmonic2 = 0.5f, harmonic3 = 0.35f, harmonic4 = 0.2f;
+
+    static float oscillator (double ph, double subPh, float shape, float harm, float sub)
     {
         const float sine = (float) std::sin (twoPi * ph);
         const float p = (float) ph;
         const float tri = p < 0.25f ? 4.0f * p : (p < 0.75f ? 2.0f - 4.0f * p : 4.0f * p - 4.0f);
-        return sine + (tri - sine) * shape + (float) std::sin (twoPi * subPh) * sub;
+        float out = sine + (tri - sine) * shape + (float) std::sin (twoPi * subPh) * sub;
+        if (harm > 1.0e-4f)
+            out += harm * (harmonic2 * (float) std::sin (2.0 * twoPi * ph)
+                         + harmonic3 * (float) std::sin (3.0 * twoPi * ph)
+                         + harmonic4 * (float) std::sin (4.0 * twoPi * ph));
+        return out;
+    }
+
+    // Pitch-drop shape for curve > 0: blends the exponential fall `e` with a
+    // linear fall (curve 0.5) and a held-then-falling one (curve 1), over the
+    // drop time (t = 0..1).
+    static float dropShape (float e, float t, float curve)
+    {
+        const float tt = std::min (t, 1.0f);
+        const float l = 1.0f - tt;
+        const float h = 1.0f - tt * tt * tt;
+        return curve < 0.5f ? e + (l - e) * (curve * 2.0f)
+                            : l + (h - l) * ((curve - 0.5f) * 2.0f);
+    }
+
+    void startPitchDrop (float velocity01)
+    {
+        const float v = std::clamp (velocity01, 0.0f, 1.0f);
+        dropScale = 1.0f - params.velocityToPitchDrop + params.velocityToPitchDrop * v;
+        dropExp = pitchDropEnv = 1.0f;
+        dropPos = 0.0f;
     }
 
     void advance (double& ph, double& subPh, double freq) const
@@ -499,7 +553,7 @@ private:
         currentNote = note;
         currentPitch = (float) note;
         glideActive = false;
-        pitchDropEnv = 1.0f;
+        startPitchDrop (velocity01);
         stage = Stage::attack;
         noteAge = 0;
         vibFade = 0.0f;
@@ -534,7 +588,7 @@ private:
 
     void moveToNote (int note)
     {
-        if (params.glideMode == GlideMode::legato)
+        if (params.glideMode != GlideMode::off)
             startGlide (note);
         else
         {
@@ -607,10 +661,10 @@ private:
     float glideStart = 36.0f, glideTarget = 36.0f, glidePos = 0.0f, glideInc = 0.0f;
     bool glideActive = false;
 
-    float pitchDropEnv = 0.0f;
+    float pitchDropEnv = 0.0f, dropExp = 0.0f, dropPos = 2.0f, dropScale = 1.0f;
     float bendTarget = 0.0f, bendSmoothed = 0.0f, bendCoef = 0.0f;
 
-    float smoothCoef = 0.0f, tuneSmoothed = 0.0f, shapeSmoothed = 0.0f, subSmoothed = 0.0f, sustainSmoothed = 0.5f;
+    float smoothCoef = 0.0f, tuneSmoothed = 0.0f, shapeSmoothed = 0.0f, harmSmoothed = 0.0f, subSmoothed = 0.0f, sustainSmoothed = 0.5f;
     bool firstRender = true;
 
     float vibPhase = 0.0f, vibFade = 0.0f;

@@ -363,23 +363,27 @@ Access808Editor::Access808Editor (Access808Processor& p)
     presetSection.addRow (presetButtons, nullptr);
     refreshPresetBox();
 
-    // ---- Column 1: Glide, Pitch ----
+    // Columns are filled in section order (so reading and Tab order go down
+    // one column, then the next), balanced in height.
+    // ---- Column 1: Glide, Pitch, Amp Envelope ----
     auto& glide = addSection ("Glide", 0);
     for (auto id : { ids::glideMode, ids::glideTime, ids::glideSync, ids::glideTiming, ids::glideCurve,
                      ids::slideRetrigger, ids::notePriority })
         addParameter (glide, id);
 
     auto& pitch = addSection ("Pitch", 0);
-    for (auto id : { ids::tune, ids::fine, ids::tuningRef, ids::pitchDrop, ids::pitchDropTime })
+    for (auto id : { ids::tune, ids::fine, ids::tuningRef, ids::pitchDrop, ids::pitchDropTime, ids::pitchDropCurve })
         addParameter (pitch, id);
 
     // ---- Column 2: Envelope, Tone, Saturation and Filter ----
-    auto& env = addSection ("Amp Envelope", 1);
-    for (auto id : { ids::attack, ids::hold, ids::decay, ids::decayCurve, ids::sustain, ids::release, ids::phaseReset })
+    auto& env = addSection ("Amp Envelope", 0);
+    for (auto id : { ids::attack, ids::hold, ids::decay, ids::decaySync, ids::decayCurve, ids::sustain, ids::release,
+                     ids::phaseReset })
         addParameter (env, id);
 
+    // ---- Column 2: Tone, Saturation and Filter, Modulation ----
     auto& tone = addSection ("Tone", 1);
-    for (auto id : { ids::waveShape, ids::subLevel, ids::clickType, ids::clickLevel, ids::clickTone,
+    for (auto id : { ids::waveShape, ids::harmonics, ids::subLevel, ids::clickType, ids::clickLevel, ids::clickTone,
                      ids::clickFollowsAttack })
         addParameter (tone, id);
 
@@ -389,12 +393,14 @@ Access808Editor::Access808Editor (Access808Processor& p)
         addParameter (sat, id);
 
     // ---- Column 3: Modulation, Playing, Mix, Window ----
-    auto& mod = addSection ("Modulation", 2);
+    auto& mod = addSection ("Modulation", 1);
     for (auto id : { ids::vibratoRate, ids::vibratoDepth, ids::vibratoDelay, ids::drift })
         addParameter (mod, id);
 
+    // ---- Column 3: Playing, Mix and Ducking, Window ----
     auto& playing = addSection ("Playing", 2);
-    for (auto id : { ids::velocitySens, ids::velocityToDrive, ids::velocityToClick, ids::bendRange })
+    for (auto id : { ids::velocitySens, ids::velocityToDrive, ids::velocityToClick, ids::velocityToPitchDrop,
+                     ids::bendRange })
         addParameter (playing, id);
 
     auto& mix = addSection ("Mix and Ducking", 2);
@@ -456,6 +462,8 @@ Access808Editor::Access808Editor (Access808Processor& p)
     ui::setSpeaker ([this] (const juce::String& text, bool interrupt) { speak (text, interrupt); });
     if (auto* sync = processor.apvts.getParameter (ids::glideSync))
         glideSyncIndex = sync->getParameterIndex();
+    if (auto* sync = processor.apvts.getParameter (ids::decaySync))
+        decaySyncIndex = sync->getParameterIndex();
 
     applyTheme();
     processor.addListener (this);
@@ -516,6 +524,8 @@ void Access808Editor::addParameter (ui::Section& section, const char* paramId)
         slider->setHelp (help);
         if (juce::String (paramId) == ids::glideTime)
             glideTimeSlider = slider.get();
+        if (juce::String (paramId) == ids::decay)
+            decaySlider = slider.get();
         c.sliderAttachment = std::make_unique<SliderAttachment> (processor.apvts, paramId, *slider);
         // Double-click (or Alt+click) goes back to the parameter's default.
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
@@ -890,11 +900,14 @@ void Access808Editor::speakDuckStatus()
 
 void Access808Editor::audioProcessorParameterChanged (juce::AudioProcessor*, int index, float)
 {
-    // Glide Time's value text says when Glide Sync makes it inactive.
-    if (index != glideSyncIndex || glideTimeSlider == nullptr)
+    // Glide Time's and Decay's value text says when their Sync makes them inactive.
+    juce::Slider* slider = index == glideSyncIndex ? glideTimeSlider
+                         : index == decaySyncIndex ? decaySlider
+                                                   : nullptr;
+    if (slider == nullptr)
         return;
 
-    juce::Component::SafePointer<juce::Slider> safe (glideTimeSlider);
+    juce::Component::SafePointer<juce::Slider> safe (slider);
     juce::MessageManager::callAsync ([safe]
     {
         if (safe != nullptr)

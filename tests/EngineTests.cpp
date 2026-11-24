@@ -477,3 +477,129 @@ TEST_CASE ("Click follows a slow attack unless turned off")
     REQUIRE (clickEnergy (true, 1.0f) == clickEnergy (false, 1.0f)); // short attacks are untouched
     REQUIRE (clickEnergy (true, 100.0f) < clickEnergy (false, 100.0f) * 0.05);
 }
+
+// ---- Glide Always, pitch drop curve and velocity, harmonics -----------------
+
+TEST_CASE ("Glide Always slides from a release tail, but not from silence")
+{
+    EngineParams p;
+    p.glideMode = GlideMode::always;
+    p.glideMs = 100.0f;
+    auto e = makeEngine (p);
+
+    e.noteOn (36, 1.0f);
+    run (e, msToSamples (50));
+    e.noteOff (36);
+    run (e, msToSamples (20)); // released, still sounding
+
+    e.noteOn (48, 1.0f);
+    REQUIRE (e.isGliding());
+    REQUIRE (e.getStage() == Engine808::Stage::attack); // a new hit, not a tied note
+    REQUIRE_THAT (e.getCurrentPitch(), WithinAbs (36.0, 1e-4));
+    run (e, msToSamples (110));
+    REQUIRE_THAT (e.getCurrentPitch(), WithinAbs (48.0, 1e-4));
+
+    // Once silent, the next note starts on its own pitch.
+    e.noteOff (48);
+    run (e, msToSamples (2000));
+    REQUIRE (e.getStage() == Engine808::Stage::idle);
+    e.noteOn (40, 1.0f);
+    REQUIRE_FALSE (e.isGliding());
+    REQUIRE_THAT (e.getCurrentPitch(), WithinAbs (40.0, 1e-6));
+}
+
+TEST_CASE ("Glide Always still glides on overlapping notes, like Legato")
+{
+    EngineParams p;
+    p.glideMode = GlideMode::always;
+    p.sustain = 1.0f;
+    auto e = makeEngine (p);
+    e.noteOn (36, 1.0f);
+    run (e, msToSamples (50));
+    e.noteOn (43, 1.0f);
+    REQUIRE (e.isGliding());
+    REQUIRE (e.getStage() != Engine808::Stage::attack);
+}
+
+TEST_CASE ("Pitch drop curve: exponential by default, linear at 50%, held at 100%")
+{
+    auto levelAtHalfTime = [] (float curve)
+    {
+        EngineParams p;
+        p.pitchDropMs = 40.0f;
+        p.pitchDropCurve = curve;
+        auto e = makeEngine (p);
+        e.noteOn (36, 1.0f);
+        run (e, msToSamples (20));
+        return e.getPitchDropLevel();
+    };
+
+    REQUIRE_THAT (levelAtHalfTime (0.0f), WithinAbs (std::exp (-6.9078 * 0.5), 0.005));
+    REQUIRE_THAT (levelAtHalfTime (0.5f), WithinAbs (0.5, 0.01));
+    REQUIRE_THAT (levelAtHalfTime (1.0f), WithinAbs (1.0 - 0.125, 0.01));
+
+    // Every curve has finished at the end of the drop time.
+    EngineParams p;
+    p.pitchDropCurve = 1.0f;
+    auto e = makeEngine (p);
+    e.noteOn (36, 1.0f);
+    run (e, msToSamples (45));
+    REQUIRE (e.getPitchDropLevel() < 0.001f);
+}
+
+TEST_CASE ("Velocity to pitch drop scales the drop of soft hits")
+{
+    auto startCents = [] (float vtpd, float velocity)
+    {
+        EngineParams p = pureTone();
+        p.pitchDropSemis = 12.0f;
+        p.velocityToPitchDrop = vtpd;
+        auto e = makeEngine (p);
+        e.noteOn (36, velocity);
+        run (e, 1);
+        return cents (e.getLastFrequency(), noteHz (36));
+    };
+
+    REQUIRE_THAT (startCents (0.0f, 0.25f), WithinAbs (1200.0, 5.0)); // off: full drop at any velocity
+    REQUIRE_THAT (startCents (1.0f, 1.0f),  WithinAbs (1200.0, 5.0)); // full velocity: full drop
+    REQUIRE_THAT (startCents (1.0f, 0.25f), WithinAbs (300.0, 5.0));  // a quarter of the drop
+}
+
+TEST_CASE ("Harmonics add clean overtones and start click-free")
+{
+    // Amplitude of the component at `hz`, over whole cycles of 110 Hz.
+    auto amplitudeAt = [] (const std::vector<float>& x, double hz)
+    {
+        double re = 0.0, im = 0.0;
+        for (size_t i = 0; i < x.size(); ++i)
+        {
+            const double w = 2.0 * 3.141592653589793 * hz * (double) i / sr;
+            re += x[i] * std::cos (w);
+            im += x[i] * std::sin (w);
+        }
+        return 2.0 * std::sqrt (re * re + im * im) / (double) x.size();
+    };
+
+    auto render = [] (float harmonics, std::vector<float>& first)
+    {
+        EngineParams p = pureTone();
+        p.harmonics = harmonics;
+        p.attackMs = 0.0f;
+        auto e = makeEngine (p);
+        e.noteOn (45, 1.0f); // A2, 110 Hz
+        first = run (e, 4);
+        run (e, msToSamples (200)); // let smoothing and attack settle
+        return run (e, msToSamples (100)); // 0.1 s = 11 whole cycles of 110 Hz
+    };
+
+    std::vector<float> first;
+    const auto plain = render (0.0f, first);
+    const auto rich = render (1.0f, first);
+    REQUIRE (std::abs (first[0]) < 0.05f); // all partials start at zero phase
+
+    const double f1 = amplitudeAt (rich, 110.0);
+    REQUIRE (amplitudeAt (plain, 220.0) < 0.01 * amplitudeAt (plain, 110.0));
+    REQUIRE_THAT (amplitudeAt (rich, 220.0) / f1, WithinAbs (0.5, 0.03));
+    REQUIRE_THAT (amplitudeAt (rich, 330.0) / f1, WithinAbs (0.35, 0.03));
+    REQUIRE_THAT (amplitudeAt (rich, 440.0) / f1, WithinAbs (0.2, 0.03));
+}

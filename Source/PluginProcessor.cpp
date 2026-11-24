@@ -42,14 +42,16 @@ Access808Processor::Access808Processor()
     raw = { get (ids::glideMode), get (ids::glideTime), get (ids::glideSync), get (ids::glideTiming),
             get (ids::glideCurve), get (ids::slideRetrigger), get (ids::notePriority),
             get (ids::tune), get (ids::fine), get (ids::tuningRef), get (ids::pitchDrop), get (ids::pitchDropTime),
-            get (ids::attack), get (ids::hold), get (ids::decay), get (ids::decayCurve), get (ids::sustain),
-            get (ids::release), get (ids::phaseReset),
-            get (ids::waveShape), get (ids::subLevel), get (ids::clickType), get (ids::clickLevel), get (ids::clickTone),
+            get (ids::pitchDropCurve),
+            get (ids::attack), get (ids::hold), get (ids::decay), get (ids::decaySync), get (ids::decayCurve),
+            get (ids::sustain), get (ids::release), get (ids::phaseReset),
+            get (ids::waveShape), get (ids::harmonics), get (ids::subLevel), get (ids::clickType), get (ids::clickLevel), get (ids::clickTone),
             get (ids::clickFollowsAttack),
             get (ids::saturationType), get (ids::drive), get (ids::driveCompensation), get (ids::saturationMix),
             get (ids::oversampling), get (ids::cutoff), get (ids::resonance),
             get (ids::vibratoRate), get (ids::vibratoDepth), get (ids::vibratoDelay), get (ids::drift),
-            get (ids::velocitySens), get (ids::velocityToDrive), get (ids::velocityToClick), get (ids::bendRange),
+            get (ids::velocitySens), get (ids::velocityToDrive), get (ids::velocityToClick), get (ids::velocityToPitchDrop),
+            get (ids::bendRange),
             get (ids::stereoWidth), get (ids::duckAmount), get (ids::duckThreshold), get (ids::duckRelease),
             get (ids::output) };
 }
@@ -150,36 +152,46 @@ EngineParams Access808Processor::readEngineParams()
     e.phaseReset     = (PhaseReset)     (int) load (raw.phaseReset);
     e.clickType      = (ClickType)      (int) load (raw.clickType);
 
-    e.glideMs = load (raw.glideTime);
-    const int sync = (int) load (raw.glideSync);
-    if (sync > 0 && sync < (int) std::size (glideSyncBeats))
+    // Tempo for the synced times; 120 BPM when the host gives none.
+    auto beatMs = [this]
     {
         double bpm = 120.0;
         if (auto* ph = getPlayHead())
             if (auto pos = ph->getPosition())
                 if (auto b = pos->getBpm())
                     bpm = juce::jlimit (20.0, 999.0, *b);
-        e.glideMs = (float) (glideSyncBeats[sync] * 60000.0 / bpm);
-    }
+        return 60000.0 / bpm;
+    };
+
+    e.glideMs = load (raw.glideTime);
+    const int sync = (int) load (raw.glideSync);
+    if (sync > 0 && sync < (int) std::size (glideSyncBeats))
+        e.glideMs = (float) (glideSyncBeats[sync] * beatMs());
 
     e.tuneSemis       = load (raw.tune);
     e.fineCents       = load (raw.fine);
     e.tuningRefHz     = load (raw.tuningRef);
     e.pitchDropSemis  = load (raw.pitchDrop);
     e.pitchDropMs     = load (raw.pitchDropTime);
+    e.pitchDropCurve  = load (raw.pitchDropCurve);
     e.attackMs        = load (raw.attack);
     e.holdMs          = load (raw.hold);
     e.decayMs         = load (raw.decay);
+    const int decaySync = (int) load (raw.decaySync);
+    if (decaySync > 0 && decaySync < (int) std::size (decaySyncBeats))
+        e.decayMs = (float) (decaySyncBeats[decaySync] * beatMs());
     e.decayCurve      = load (raw.decayCurve);
     e.sustain         = load (raw.sustain);
     e.releaseMs       = load (raw.release);
     e.waveShape       = load (raw.waveShape);
+    e.harmonics       = load (raw.harmonics);
     e.subLevel        = load (raw.subLevel);
     e.clickLevel      = load (raw.clickLevel);
     e.clickTone       = load (raw.clickTone);
     e.clickFollowsAttack = load (raw.clickFollowsAttack) >= 0.5f;
     e.velocitySens    = load (raw.velocitySens);
     e.velocityToClick = load (raw.velocityToClick);
+    e.velocityToPitchDrop = load (raw.velocityToPitchDrop);
     e.bendRangeSemis  = load (raw.bendRange);
     e.vibratoRateHz   = load (raw.vibratoRate);
     e.vibratoCents    = load (raw.vibratoDepth);

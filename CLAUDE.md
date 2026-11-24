@@ -53,14 +53,15 @@ The signal path is split so that the musically important logic can be tested wit
 
 - `Source/Engine808.h` is header-only, has **no JUCE dependency**, and is what `tests/EngineTests.cpp` tests. It handles everything per note:
   - The held-note stack with last, low or high priority.
-  - The legato decision: glide if the gate is on (a key or the sustain pedal is held), otherwise retrigger.
+  - The legato decision: glide if the gate is on (a key or the sustain pedal is held), otherwise retrigger. Glide Mode Always also glides into a new hit while the previous note is still sounding (its release tail).
   - Glide that takes a constant time or a time per octave, with a linear or exponential curve, plus the slide retrigger options.
-  - The pitch-drop punch and the click (noise, tick or knock).
+  - The pitch-drop punch and the click (noise, tick or knock). Pitch Drop Curve 0 is the original multiplicative exponential, kept bit-identical; velocity can scale the drop's depth.
+  - Clean 2nd, 3rd and 4th harmonics (Harmonics), phase-locked to the fundamental.
   - The AHDSR envelope, which is position-based: decay and release times are exact, and the decay curve goes exponential, then linear, then held.
   - Same-pitch overlaps, counted per pitch so the first note-off doesn't end the second; the repeat is a new hit.
   - A minimum 1 ms rise when a sounding note re-hits, and the click scaled down by attacks over 3 ms (Click Follows Attack).
   - The phase reset with a 2 ms crossfade, vibrato, drift, the tuning reference and pitch bend.
-  - Smoothing for tune, wave, sub and sustain.
+  - Smoothing for tune, wave, harmonics, sub and sustain.
 
   `render(out, velocityOut, n)` also writes the per-sample velocity of the sounding note, which the processor uses for velocity-to-drive.
 - `Source/PluginProcessor.cpp` processes each block in this order:
@@ -71,11 +72,12 @@ The signal path is split so that the musically important logic can be tested wit
   5. Apply the DC blocker, the SVF low-pass, the stereo width (M/S with a delayed band as the side, so L+R equals 2×mid exactly; the band starts at 1.5× the note's frequency, 60 to 300 Hz), the duck gain and the output gain.
 
   The 4x and 8x oversamplers are both prepared, each in its own `SaturationStage` with its own crossover, smoothers and tape state, so switching between them never allocates. `selectOversampling()` picks one each block (8x when rendering if the parameter says so) and updates `setLatencySamples`. Saturation is processed in chunks of at most the prepared block size. Parameters are read through `RawParams` pointers cached in the constructor.
-- `Source/Parameters.cpp` holds the APVTS layout (45 parameters, in one parameter group per section, which OSARA shows as a tree) and the help text. **The parameter names and value strings are the main UI for OSARA users.**
+- `Source/Parameters.cpp` holds the APVTS layout (50 parameters, in one parameter group per section, which OSARA shows as a tree) and the help text. **The parameter names and value strings are the main UI for OSARA users.**
   - Use plain English, start names with their group word, put a unit in every value string, and keep `valueFromString` able to parse what `stringFromValue` produces (also "1.5 s" and "2.5k").
   - The layout order is the order OSARA lists them in.
   - IDs are saved in projects, so never rename them. Choice parameters are read as int indices that map onto engine enums, so append new choices at the end.
-  - `glideSyncBeats` must match the Glide Sync choice list.
+  - REAPER saves automation envelopes by parameter index. Until the first public release, new parameters go where they belong in the layout. After it, add new parameters only at the end of the layout, or existing automation moves to the wrong control.
+  - `glideSyncBeats` must match the Glide Sync choice list, and `decaySyncBeats` the Decay Sync list.
 - `Source/Presets.h` holds the factory presets as overrides on top of the defaults (real units, choice indices), with "Category - Name" names. Each sets Output so it peaks near -6 dBFS over notes 24–48; re-measure when changing a preset's sound. They are exposed as host programs.
 - `Source/PresetManager.cpp` keeps the combined factory + user list. User presets are APVTS XML files at `%APPDATA%/Access808/Presets/<Category>/<Name>.a808preset` (macOS: `~/Library/Application Support/Access808/Presets`). Loading sets each parameter with `setValueNotifyingHost`. Host programs cover factory presets only. It also does Save over a user preset, Export to any file, and Import (copies into the root folder, numbering a taken name as "Name (2)"). Tests redirect the folder with `setUserPresetDirectoryForTests`.
 - `Source/PluginEditor.cpp` is the accessible editor:

@@ -187,7 +187,8 @@ private:
     juce::TextButton duckCheckButton { "Check Ducking" }, helpButton { "Help for Focused Control (F1)" };
     juce::Component* lastFocusedControl = nullptr;
     juce::Slider* glideTimeSlider = nullptr;
-    int glideSyncIndex = -1;
+    juce::Slider* decaySlider = nullptr;
+    int glideSyncIndex = -1, decaySyncIndex = -1;
 
     static constexpr int numColumns = 3;
     static constexpr int columnWidth = 410;

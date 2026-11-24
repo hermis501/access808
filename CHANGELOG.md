@@ -10,18 +10,20 @@ First public release.
   held slides to it. Three REAPER scripts write or remove the overlap for the
   selected notes and say through OSARA what they changed: Slide selected notes
   into next note, Remove slide from selected notes, and Set slide overlap.
-- **Glide controls:** time or tempo-synced length, the same time for any
-  interval or time per octave, linear or exponential curve, retrigger
+- **Glide controls:** Legato or Always mode (Always also slides from a
+  release tail, without overlaps), time or tempo-synced length, the same time
+  for any interval or time per octave, linear or exponential curve, retrigger
   options, and last, lowest or highest note priority.
-- **The 808 sound:** pitch-drop punch, click (noise, tick or knock), AHDSR
-  envelope, seven saturation types with oversampling, low-pass filter, and
-  stereo width that keeps the sub in mono.
+- **The 808 sound:** pitch-drop punch with a curve and velocity control,
+  click (noise, tick or knock), AHDSR envelope with a tempo-synced decay
+  option, clean harmonics for phones and laptops, seven saturation types with
+  oversampling, low-pass filter, and stereo width that keeps the sub in mono.
 - **Kick ducking** from a sidechain send, with a Check Ducking button that says
   whether the routing works.
 - **Factory presets**, all peaking near -6 dBFS, and your own presets with
   categories: Save, Save As, Rename, Delete, Import, Export, Open Folder, and
   Previous and Next.
-- **Accessible everywhere:** 45 host parameters with plain names and values in
+- **Accessible everywhere:** 50 host parameters with plain names and values in
   units, grouped in sections for OSARA, and a plugin window that works with
   NVDA, JAWS, Narrator and VoiceOver. F1 speaks the focused control's help,
   and messages are spoken through OSARA in REAPER.
