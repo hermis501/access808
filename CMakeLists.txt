@@ -85,8 +85,14 @@ target_link_libraries(Access808
         juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+# Link-time optimisation on Windows only. On macOS a universal (arm64 and
+# x86_64) build with LTO relinks every product slowly enough to run CI for
+# over an hour; ASampler builds without it too.
+if(NOT APPLE)
+    target_link_libraries(Access808 PUBLIC juce::juce_recommended_lto_flags)
+endif()
 
 # ---- Unit tests for the JUCE-free DSP engine (Source/Engine808.h) ----
 option(ACCESS808_BUILD_TESTS "Build the unit tests" ON)
