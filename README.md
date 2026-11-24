@@ -210,7 +210,10 @@ Windows, VoiceOver on macOS):
 With a mouse:
 
 - Hover over any control to see its help text.
-- Drag a slider, or use the mouse wheel over it.
+- Drag a slider. The mouse wheel changes a slider only after you click it;
+  otherwise the wheel scrolls the window, so scrolling never changes a sound.
+- Glide Time and Decay are greyed out while Glide Sync or Decay Sync replaces
+  them. They can still be reached and read.
 - Double-click a slider, or Alt+click it, to reset it to its default.
 - Click a slider's value to type an exact value.
 - The focused control has an outline, so keyboard users can see where they

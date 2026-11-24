@@ -42,6 +42,10 @@ public:
     AccessibleSlider();
     ~AccessibleSlider() override;
     bool keyPressed (const juce::KeyPress&) override;
+    // The wheel changes the value only once the slider has been clicked (has
+    // focus); otherwise it scrolls the window, so scrolling the page never
+    // changes a sound by accident.
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
     // Sets the help text and the tooltip (the same text) on the slider and its
     // value box. JUCE gives screen readers a slider's tooltip as its help.
@@ -145,6 +149,9 @@ private:
                          std::function<void (const juce::String&, const juce::String&)> onOk);
 
     void applyTheme();
+    // Greys out Glide Time and Decay while their Sync replaces them, and
+    // refreshes their value text. They stay focusable and readable.
+    void updateInactiveControls();
     void applyScale();
     void layoutContent();
 
@@ -188,6 +195,8 @@ private:
     juce::Component* lastFocusedControl = nullptr;
     juce::Slider* glideTimeSlider = nullptr;
     juce::Slider* decaySlider = nullptr;
+    juce::Label* glideTimeLabel = nullptr;
+    juce::Label* decayLabel = nullptr;
     int glideSyncIndex = -1, decaySyncIndex = -1;
 
     static constexpr int numColumns = 3;

@@ -93,6 +93,14 @@ void AccessibleSlider::attachValueBox()
     }
 }
 
+void AccessibleSlider::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+{
+    if (hasKeyboardFocus (true))
+        juce::Slider::mouseWheelMove (e, wheel);
+    else
+        juce::Component::mouseWheelMove (e, wheel); // passes it up to the scrolling view
+}
+
 void AccessibleSlider::setHelp (const juce::String& help)
 {
     setHelpText (help);
@@ -466,6 +474,7 @@ Access808Editor::Access808Editor (Access808Processor& p)
         decaySyncIndex = sync->getParameterIndex();
 
     applyTheme();
+    updateInactiveControls();
     processor.addListener (this);
     juce::Desktop::getInstance().addFocusChangeListener (this);
     applyScale();
@@ -534,6 +543,8 @@ void Access808Editor::addParameter (ui::Section& section, const char* paramId)
     }
 
     auto& label = makeLabel (name);
+    if (juce::String (paramId) == ids::glideTime) glideTimeLabel = &label;
+    if (juce::String (paramId) == ids::decay)     decayLabel = &label;
     label.setTooltip (dynamic_cast<juce::SettableTooltipClient*> (c.component.get())->getTooltip());
     section.addRow (*c.component, &label);
     controls.push_back (std::move (c));
@@ -900,19 +911,35 @@ void Access808Editor::speakDuckStatus()
 
 void Access808Editor::audioProcessorParameterChanged (juce::AudioProcessor*, int index, float)
 {
-    // Glide Time's and Decay's value text says when their Sync makes them inactive.
-    juce::Slider* slider = index == glideSyncIndex ? glideTimeSlider
-                         : index == decaySyncIndex ? decaySlider
-                                                   : nullptr;
-    if (slider == nullptr)
+    if (index != glideSyncIndex && index != decaySyncIndex)
         return;
 
-    juce::Component::SafePointer<juce::Slider> safe (slider);
-    juce::MessageManager::callAsync ([safe]
+    juce::Component::SafePointer<Access808Editor> safeThis (this);
+    juce::MessageManager::callAsync ([safeThis]
     {
-        if (safe != nullptr)
-            safe->updateText();
+        if (safeThis != nullptr)
+            safeThis->updateInactiveControls();
     });
+}
+
+void Access808Editor::updateInactiveControls()
+{
+    auto syncOn = [this] (const char* id)
+    {
+        auto* p = dynamic_cast<juce::AudioParameterChoice*> (processor.apvts.getParameter (id));
+        return p != nullptr && p->getIndex() > 0;
+    };
+
+    const std::tuple<juce::Slider*, juce::Label*, bool> rows[] = {
+        { glideTimeSlider, glideTimeLabel, syncOn (ids::glideSync) },
+        { decaySlider,     decayLabel,     syncOn (ids::decaySync) },
+    };
+    for (const auto& [slider, label, inactive] : rows)
+    {
+        const float alpha = inactive ? 0.4f : 1.0f;
+        if (slider != nullptr) { slider->setAlpha (alpha); slider->updateText(); }
+        if (label != nullptr)  label->setAlpha (alpha);
+    }
 }
 
 // ---- Look, size and focus ----
