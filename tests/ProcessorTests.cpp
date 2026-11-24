@@ -290,6 +290,32 @@ TEST_CASE ("Every factory preset renders cleanly")
     }
 }
 
+// Outside REAPER the plugin window is often the only way to reach a setting,
+// so every parameter must have its own control there.
+TEST_CASE ("The editor has a control for every parameter")
+{
+    auto p = makeProcessor();
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditor());
+    REQUIRE (editor != nullptr);
+
+    juce::StringArray titles;
+    std::function<void (juce::Component&)> collect = [&] (juce::Component& c)
+    {
+        if (dynamic_cast<juce::Slider*> (&c) != nullptr || dynamic_cast<juce::ComboBox*> (&c) != nullptr)
+            titles.add (c.getTitle());
+        for (auto* child : c.getChildren())
+            collect (*child);
+    };
+    collect (*editor);
+
+    for (auto* param : p->getParameters())
+    {
+        const auto name = param->getName (64);
+        INFO ("parameter " << name);
+        REQUIRE (titles.contains (name));
+    }
+}
+
 // Hidden (run it by name): saves a picture of the editor, to check the layout
 // without opening a host. Writes Access808-editor.png in the temp folder.
 TEST_CASE ("Editor snapshot", "[.snapshot]")
