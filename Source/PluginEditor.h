@@ -136,6 +136,8 @@ private:
     void importPresets();
     void exportPreset();
     void openPresetFolder();
+    juce::File getLastPresetFolder() const;
+    void setLastPresetFolder (const juce::File&);
     void showSaveDialog();
     void showRenameDialog();
     void deleteCurrentPreset();

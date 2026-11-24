@@ -179,6 +179,9 @@ Windows, VoiceOver on macOS):
   - Export saves the current sound as a preset file wherever you choose, to
     share it or keep a backup.
   - Open Folder opens your preset folder in File Explorer or Finder.
+  - Import and Export use the standard Open and Save dialogs of Windows or
+    macOS. They open in the folder you used last for either of them, or in
+    Documents the first time.
 
   The shortcuts use Control, not Command, on macOS too.
 - Window: Window Size goes from 100% to 200%, and Theme can be Dark or High

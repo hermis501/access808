@@ -595,10 +595,25 @@ void Access808Editor::savePreset()
     ui::announce (error.isEmpty() ? "Saved " + processor.presets.getCurrentName() : error, error.isNotEmpty());
 }
 
+juce::File Access808Editor::getLastPresetFolder() const
+{
+    // The folder last used to import or export, so the dialogs open there
+    // again. Documents until then, or when that folder is gone.
+    const auto path = settings->getValue ("lastPresetFolder");
+    if (juce::File::isAbsolutePath (path) && juce::File (path).isDirectory())
+        return juce::File (path);
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+}
+
+void Access808Editor::setLastPresetFolder (const juce::File& folder)
+{
+    settings->setValue ("lastPresetFolder", folder.getFullPathName());
+    settings->saveIfNeeded();
+}
+
 void Access808Editor::importPresets()
 {
-    fileChooser = std::make_unique<juce::FileChooser> ("Import Access808 presets",
-                                                       juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+    fileChooser = std::make_unique<juce::FileChooser> ("Import Access808 presets", getLastPresetFolder(),
                                                        juce::String ("*") + PresetManager::extension);
     juce::Component::SafePointer<Access808Editor> safeThis (this);
     fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
@@ -616,6 +631,7 @@ void Access808Editor::importPresets()
             return;
         }
 
+        safeThis->setLastPresetFolder (files.getFirst().getParentDirectory());
         const auto result = safeThis->processor.presets.importFiles (files);
         safeThis->refreshPresetBox();
 
@@ -637,8 +653,7 @@ void Access808Editor::importPresets()
 
 void Access808Editor::exportPreset()
 {
-    const auto start = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                           .getChildFile (processor.presets.getExportName() + PresetManager::extension);
+    const auto start = getLastPresetFolder().getChildFile (processor.presets.getExportName() + PresetManager::extension);
     fileChooser = std::make_unique<juce::FileChooser> ("Export the current sound as a preset file", start,
                                                        juce::String ("*") + PresetManager::extension);
     juce::Component::SafePointer<Access808Editor> safeThis (this);
@@ -659,6 +674,7 @@ void Access808Editor::exportPreset()
         if (! file.hasFileExtension (PresetManager::extension))
             file = file.withFileExtension (PresetManager::extension);
 
+        safeThis->setLastPresetFolder (file.getParentDirectory());
         const auto error = safeThis->processor.presets.exportTo (file);
         ui::announce (error.isEmpty() ? "Exported " + file.getFileName() + " to " + file.getParentDirectory().getFullPathName()
                                       : error,
