@@ -19,10 +19,13 @@ First public release.
 - **Kick ducking** from a sidechain send, with a Check Ducking button that says
   whether the routing works.
 - **Factory presets**, all peaking near -6 dBFS, and your own presets with
-  categories.
+  categories: Save, Save As, Rename, Delete, Import, Export, Open Folder, and
+  Previous and Next.
 - **Accessible everywhere:** 45 host parameters with plain names and values in
   units, grouped in sections for OSARA, and a plugin window that works with
   NVDA, JAWS, Narrator and VoiceOver. F1 speaks the focused control's help,
   and messages are spoken through OSARA in REAPER.
+- **Easy with a mouse too:** help text on hover, double-click a slider to
+  reset it, click a value to type one, and a visible focus outline.
 - **Windows installer** that also installs the REAPER scripts and adds them to
   the Actions list.

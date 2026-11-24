@@ -11,8 +11,11 @@
 //
 // Slider keys: arrows = small step (Shift = finer), Page Up/Down = large step,
 // Home/End = minimum/maximum, Enter or F2 = type an exact value.
-// Ctrl+S = save the current sound as a user preset. F1 = speak help for the
-// focused control.
+// Ctrl+S = save over the selected user preset (Save As for a factory one),
+// Ctrl+Shift+S = Save As. F1 = speak help for the focused control.
+//
+// Mouse: double-click (or Alt+click) a slider to reset it to its default,
+// click a slider's value to type one, hover any control for its help text.
 
 namespace access808::ui
 {
@@ -37,11 +40,41 @@ class AccessibleSlider : public juce::Slider
 {
 public:
     AccessibleSlider();
+    ~AccessibleSlider() override;
     bool keyPressed (const juce::KeyPress&) override;
 
-private:
-    void stepByProportion (double delta);
+    // Sets the help text and the tooltip (the same text) on the slider and its
+    // value box. JUCE gives screen readers a slider's tooltip as its help.
+    void setHelp (const juce::String& help);
     void promptForValue();
+
+private:
+    void lookAndFeelChanged() override;
+    void attachValueBox();
+    void stepByProportion (double delta);
+
+    // A click on the value text opens the typed-value prompt.
+    struct ValueBoxClick : juce::MouseListener
+    {
+        explicit ValueBoxClick (AccessibleSlider& s) : owner (s) {}
+        void mouseUp (const juce::MouseEvent& e) override;
+        AccessibleSlider& owner;
+    };
+
+    ValueBoxClick valueBoxClick { *this };
+    juce::Component::SafePointer<juce::Label> valueBox;
+};
+
+// Shows a control's tooltip with its name in front and, for sliders, the
+// mouse hints. Controls keep the plain help text as their tooltip, because
+// JUCE hands a slider's, combo box's or button's tooltip to screen readers as
+// its help text; the decoration exists only on screen. JUCE hides the tooltip
+// window itself from screen readers.
+class HelpTooltipWindow : public juce::TooltipWindow
+{
+public:
+    explicit HelpTooltipWindow (juce::Component* parent) : juce::TooltipWindow (parent, 700) {}
+    juce::String getTipFor (juce::Component&) override;
 };
 
 // A titled box that is exposed as an accessibility group.
@@ -50,6 +83,7 @@ class Section : public juce::Component
 public:
     Section (const juce::String& title, const Theme& theme);
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override; // outlines the focused control
     void resized() override;
 
     void addRow (juce::Component& control, juce::Label* label);
@@ -97,6 +131,11 @@ private:
 
     void refreshPresetBox();
     void loadPresetFromBox();
+    void stepPreset (int delta);
+    void savePreset();
+    void importPresets();
+    void exportPreset();
+    void openPresetFolder();
     void showSaveDialog();
     void showRenameDialog();
     void deleteCurrentPreset();
@@ -119,6 +158,7 @@ private:
     Access808Processor& processor;
     access808::ScreenReaderAnnouncer announcer { *this };
     juce::LookAndFeel_V4 lookAndFeel; // declared before the components so it outlives them
+    access808::ui::HelpTooltipWindow tooltipWindow { this }; // help text on mouse hover
     access808::ui::Theme theme = access808::ui::Theme::dark();
     std::unique_ptr<juce::PropertiesFile> settings;
     float scale = 1.0f;
@@ -132,9 +172,15 @@ private:
     std::vector<Control> controls;
     std::vector<std::unique_ptr<juce::Label>> extraLabels;
 
+    juce::Label titleLabel, hintLabel; // painted header, not exposed to screen readers
     juce::ComboBox presetBox;
+    juce::Component presetRow;     // the preset list with Previous and Next
     juce::Component presetButtons;
-    juce::TextButton saveButton { "Save As" }, renameButton { "Rename" }, deleteButton { "Delete" };
+    juce::TextButton prevButton { "Previous" }, nextButton { "Next" };
+    juce::TextButton saveButton { "Save" }, saveAsButton { "Save As" }, renameButton { "Rename" },
+                     deleteButton { "Delete" }, importButton { "Import" }, exportButton { "Export" },
+                     folderButton { "Open Folder" };
+    std::unique_ptr<juce::FileChooser> fileChooser;
     juce::ComboBox sizeBox, themeBox;
     juce::TextButton duckCheckButton { "Check Ducking" }, helpButton { "Help for Focused Control (F1)" };
     juce::Component* lastFocusedControl = nullptr;
@@ -142,8 +188,10 @@ private:
     int glideSyncIndex = -1;
 
     static constexpr int numColumns = 3;
-    static constexpr int columnWidth = 380;
+    static constexpr int columnWidth = 410;
     static constexpr int margin = 12;
+    static constexpr int headerHeight = 34;
+    static constexpr int fullWidth = -1; // addSection column for a section across all columns
     int contentWidth = 0, contentHeight = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Access808Editor)

@@ -164,12 +164,35 @@ Windows, VoiceOver on macOS):
   - Enter or F2 opens a box where you type a value, such as "120", "1.5 s" or
     "2.5k". The new value is spoken.
 - On list boxes, Up and Down change the choice.
-- Presets: the Preset list holds factory presets and your own presets. Save As
-  (Control+S, also Control and not Command on macOS), Rename and Delete work on user presets, with a name and an
-  optional category. Each result is spoken.
+- Presets: the Preset section is at the top of the window. The Preset list
+  holds factory presets and your own presets; Previous and Next load the
+  neighbouring preset. Then come these buttons, and each result is spoken:
+  - Save (Control+S) saves the current sound over the selected user preset.
+    On a factory preset it works like Save As.
+  - Save As (Control+Shift+S) saves a new user preset, with a name and an
+    optional category.
+  - Rename and Delete work on user presets. Delete moves the file to the
+    Recycle Bin, or the Trash on macOS.
+  - Import copies preset files (`.a808preset`), for example from a friend,
+    into your presets and loads the first one. A name that is already taken
+    gets a number, such as "My 808 (2)", so nothing is overwritten.
+  - Export saves the current sound as a preset file wherever you choose, to
+    share it or keep a backup.
+  - Open Folder opens your preset folder in File Explorer or Finder.
+
+  The shortcuts use Control, not Command, on macOS too.
 - Window: Window Size goes from 100% to 200%, and Theme can be Dark or High
   contrast. When the window is larger than the screen, it scrolls to keep the
   focused control in view.
+
+With a mouse:
+
+- Hover over any control to see its help text.
+- Drag a slider, or use the mouse wheel over it.
+- Double-click a slider, or Alt+click it, to reset it to its default.
+- Click a slider's value to type an exact value.
+- The focused control has an outline, so keyboard users can see where they
+  are.
 
 If REAPER takes the arrow keys or Control+S, turn on "Send all keyboard input
 to plugin" in the FX window's menu.

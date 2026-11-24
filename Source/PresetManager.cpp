@@ -8,8 +8,22 @@ PresetManager::PresetManager (juce::AudioProcessorValueTreeState& s) : apvts (s)
     refresh();
 }
 
+namespace
+{
+    juce::File& testDirectory()
+    {
+        static juce::File dir;
+        return dir;
+    }
+}
+
+void PresetManager::setUserPresetDirectoryForTests (const juce::File& dir) { testDirectory() = dir; }
+
 juce::File PresetManager::getUserPresetDirectory()
 {
+    if (testDirectory() != juce::File())
+        return testDirectory();
+
     // Windows: %APPDATA%\Access808\Presets. macOS: ~/Library/Application
     // Support/Access808/Presets (JUCE's user data folder there is ~/Library).
     auto base = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
@@ -126,6 +140,25 @@ juce::String PresetManager::load (int index)
     return {};
 }
 
+juce::String PresetManager::displayNameFor (const juce::String& name, const juce::String& category)
+{
+    return "User - " + (category.isNotEmpty() ? category + " - " : juce::String()) + name;
+}
+
+juce::String PresetManager::writeCurrentState (const juce::File& file) const
+{
+    if (! file.getParentDirectory().createDirectory())
+        return "Could not create the folder " + file.getParentDirectory().getFullPathName() + ".";
+
+    auto state = apvts.copyState();
+    state.removeProperty ("program", nullptr);
+    state.removeProperty ("presetName", nullptr);
+    auto xml = state.createXml();
+    if (xml == nullptr || ! xml->writeTo (file))
+        return "Could not write the preset file " + file.getFileName() + ".";
+    return {};
+}
+
 juce::String PresetManager::saveUser (const juce::String& rawName, const juce::String& rawCategory)
 {
     const auto name = sanitise (rawName);
@@ -133,22 +166,77 @@ juce::String PresetManager::saveUser (const juce::String& rawName, const juce::S
     if (name.isEmpty())
         return "Preset name is empty.";
 
-    const auto file = fileFor (name, category);
-    if (! file.getParentDirectory().createDirectory())
-        return "Could not create the preset folder.";
-
-    auto state = apvts.copyState();
-    state.removeProperty ("program", nullptr);
-    state.removeProperty ("presetName", nullptr);
-    auto xml = state.createXml();
-    if (xml == nullptr || ! xml->writeTo (file))
-        return "Could not write the preset file.";
+    if (auto error = writeCurrentState (fileFor (name, category)); error.isNotEmpty())
+        return error;
 
     refresh();
-    const auto idx = indexOfDisplayName ("User - " + (category.isNotEmpty() ? category + " - " : juce::String()) + name);
+    const auto idx = indexOfDisplayName (displayNameFor (name, category));
     if (idx >= 0)
         currentName = entries[(size_t) idx].displayName;
     return {};
+}
+
+juce::String PresetManager::saveOver (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) entries.size()) || entries[(size_t) index].isFactory())
+        return "Factory presets cannot be overwritten. Use Save As to save a copy.";
+
+    const auto entry = entries[(size_t) index];
+    if (auto error = writeCurrentState (entry.file); error.isNotEmpty())
+        return error;
+
+    refresh();
+    currentName = entry.displayName;
+    return {};
+}
+
+juce::String PresetManager::exportTo (const juce::File& file) const
+{
+    return writeCurrentState (file);
+}
+
+juce::String PresetManager::getExportName() const
+{
+    for (const auto& e : entries)
+        if (e.displayName == currentName)
+            return sanitise (e.name);
+    return sanitise (currentName).isNotEmpty() ? sanitise (currentName) : juce::String ("Access808 preset");
+}
+
+PresetManager::ImportResult PresetManager::importFiles (const juce::Array<juce::File>& files)
+{
+    ImportResult result;
+    const auto root = getUserPresetDirectory();
+
+    for (const auto& f : files)
+    {
+        auto xml = juce::XmlDocument::parse (f);
+        if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+        {
+            result.failed.add (f.getFileName());
+            continue;
+        }
+
+        auto name = sanitise (f.getFileNameWithoutExtension());
+        if (name.isEmpty())
+            name = "Imported preset";
+
+        auto dest = root.getChildFile (name + extension);
+        for (int n = 2; dest.exists(); ++n)
+            dest = root.getChildFile (name + " (" + juce::String (n) + ")" + extension);
+
+        if (! root.createDirectory() || ! f.copyFileTo (dest))
+        {
+            result.failed.add (f.getFileName());
+            continue;
+        }
+
+        if (result.imported++ == 0)
+            result.firstDisplayName = displayNameFor (dest.getFileNameWithoutExtension(), {});
+    }
+
+    refresh();
+    return result;
 }
 
 juce::String PresetManager::renameUser (int index, const juce::String& rawName, const juce::String& rawCategory)
@@ -174,7 +262,7 @@ juce::String PresetManager::renameUser (int index, const juce::String& rawName, 
         oldDir.deleteFile();
 
     refresh();
-    const auto idx = indexOfDisplayName ("User - " + (category.isNotEmpty() ? category + " - " : juce::String()) + name);
+    const auto idx = indexOfDisplayName (displayNameFor (name, category));
     if (idx >= 0)
         currentName = entries[(size_t) idx].displayName;
     return {};

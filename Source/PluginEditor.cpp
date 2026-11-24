@@ -6,6 +6,12 @@ using namespace access808;
 namespace
 {
     const float scaleChoices[] = { 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
+
+   #if JUCE_MAC
+    constexpr bool isMac = true;
+   #else
+    constexpr bool isMac = false;
+   #endif
 }
 
 namespace access808::ui
@@ -53,8 +59,51 @@ AccessibleSlider::AccessibleSlider()
 {
     setWantsKeyboardFocus (true);
     setTextBoxIsEditable (false); // the text box would be a second tab stop; Enter opens a prompt instead
-    setTextBoxStyle (juce::Slider::TextBoxRight, true, 130, 24);
+    setTextBoxStyle (juce::Slider::TextBoxRight, true, 110, 24); // recreates the value box: see lookAndFeelChanged
     setScrollWheelEnabled (true);
+}
+
+AccessibleSlider::~AccessibleSlider()
+{
+    if (valueBox != nullptr)
+        valueBox->removeMouseListener (&valueBoxClick);
+}
+
+void AccessibleSlider::lookAndFeelChanged()
+{
+    juce::Slider::lookAndFeelChanged(); // deletes and recreates the value box
+    attachValueBox();
+}
+
+void AccessibleSlider::attachValueBox()
+{
+    if (valueBox != nullptr)
+        valueBox->removeMouseListener (&valueBoxClick);
+    valueBox = nullptr;
+
+    for (auto* child : getChildren())
+        if (auto* label = dynamic_cast<juce::Label*> (child))
+            valueBox = label;
+
+    if (valueBox != nullptr)
+    {
+        valueBox->addMouseListener (&valueBoxClick, false);
+        valueBox->setMouseCursor (juce::MouseCursor::IBeamCursor);
+        valueBox->setTooltip (getTooltip());
+    }
+}
+
+void AccessibleSlider::setHelp (const juce::String& help)
+{
+    setHelpText (help);
+    setTooltip (help);
+    attachValueBox(); // copies the tooltip to the value box
+}
+
+void AccessibleSlider::ValueBoxClick::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && ! e.mods.isPopupMenu() && owner.isEnabled())
+        owner.promptForValue();
 }
 
 void AccessibleSlider::stepByProportion (double delta)
@@ -130,6 +179,33 @@ void AccessibleSlider::promptForValue()
 }
 
 // ============================================================================
+// HelpTooltipWindow
+
+juce::String HelpTooltipWindow::getTipFor (juce::Component& c)
+{
+    const auto tip = juce::TooltipWindow::getTipFor (c);
+    if (tip.isEmpty())
+        return {};
+
+    // A slider's value box or a combo box's text: describe the whole control.
+    auto* owner = &c;
+    if (auto* parent = c.getParentComponent())
+        if (dynamic_cast<juce::Slider*> (parent) != nullptr || dynamic_cast<juce::ComboBox*> (parent) != nullptr)
+            owner = parent;
+
+    auto title = owner->getTitle();
+    if (auto* button = dynamic_cast<juce::Button*> (owner); button != nullptr && title.isEmpty())
+        title = button->getButtonText();
+    if (auto* label = dynamic_cast<juce::Label*> (owner); label != nullptr && title.isEmpty())
+        title = label->getText();
+
+    auto text = title.isNotEmpty() ? title + ": " + tip : tip;
+    if (dynamic_cast<juce::Slider*> (owner) != nullptr)
+        text << "\nDouble-click to reset. Click the value to type one.";
+    return text;
+}
+
+// ============================================================================
 // Section
 
 Section::Section (const juce::String& title, const Theme& t) : theme (t)
@@ -164,6 +240,25 @@ void Section::paint (juce::Graphics& g)
                 juce::Justification::centredLeft);
 }
 
+void Section::paintOverChildren (juce::Graphics& g)
+{
+    // A visible focus ring, for sighted keyboard users; JUCE's default look
+    // shows none on sliders.
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    if (focused == nullptr || ! isParentOf (focused))
+        return;
+
+    // Inside a combo box or a slider, outline the whole control.
+    while (focused->getParentComponent() != nullptr && focused->getParentComponent() != this
+           && (dynamic_cast<juce::ComboBox*> (focused->getParentComponent()) != nullptr
+               || dynamic_cast<juce::Slider*> (focused->getParentComponent()) != nullptr))
+        focused = focused->getParentComponent();
+
+    const auto r = getLocalArea (focused, focused->getLocalBounds()).toFloat().expanded (2.0f);
+    g.setColour (theme.accent);
+    g.drawRoundedRectangle (r, 4.0f, 2.0f);
+}
+
 void Section::resized()
 {
     auto area = getLocalBounds().reduced (10, 0);
@@ -173,7 +268,7 @@ void Section::resized()
     {
         auto r = area.removeFromTop (rowHeight).reduced (0, 3);
         if (row.label != nullptr)
-            row.label->setBounds (r.removeFromLeft (140));
+            row.label->setBounds (r.removeFromLeft (155));
         row.control->setBounds (r);
     }
 }
@@ -204,25 +299,71 @@ Access808Editor::Access808Editor (Access808Processor& p)
     viewport.setTitle ("Access808 controls");
     scaledHolder.addAndMakeVisible (content);
 
+    // Header for sighted users. Screen readers get the same through the window
+    // title and F1, so these are not exposed.
+    titleLabel.setText (juce::String ("Access808  ") + JucePlugin_VersionString, juce::dontSendNotification);
+    titleLabel.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    hintLabel.setText ("Hover a control for help. Double-click a slider to reset it, click its value to type one.",
+                       juce::dontSendNotification);
+    hintLabel.setFont (juce::FontOptions (15.0f));
+    hintLabel.setJustificationType (juce::Justification::centredRight);
+    for (auto* l : { &titleLabel, &hintLabel })
+    {
+        l->setAccessible (false);
+        content.addAndMakeVisible (*l);
+    }
+
     // Sections follow the parameter order, so the window and OSARA's parameter
-    // list are learned once. ---- Column 1: Preset, Glide, Pitch ----
-    auto& presetSection = addSection ("Preset", 0);
+    // list are learned once. ---- Across the top: Preset ----
+    auto& presetSection = addSection ("Preset", fullWidth);
     presetBox.setTitle ("Preset");
     presetBox.setHelpText ("Factory and user presets. Arrow keys load the next or previous preset.");
     presetBox.onChange = [this] { loadPresetFromBox(); };
-    presetSection.addRow (presetBox, &makeLabel ("Preset"));
+    for (auto* c : std::initializer_list<juce::Component*> { &presetBox, &prevButton, &nextButton })
+        presetRow.addAndMakeVisible (*c);
+    presetSection.addRow (presetRow, &makeLabel ("Preset"));
 
-    saveButton.setHelpText ("Save the current sound as a user preset. Shortcut Control+S.");
-    renameButton.setHelpText ("Rename the selected user preset or change its category.");
-    deleteButton.setHelpText ("Delete the selected user preset.");
-    saveButton.onClick   = [this] { showSaveDialog(); };
+    const auto trash = juce::String (isMac ? "Trash" : "Recycle Bin");
+    const std::pair<juce::TextButton*, const char*> buttonInfo[] = {
+        { &prevButton,   "Load the previous preset in the list." },
+        { &nextButton,   "Load the next preset in the list." },
+        { &saveButton,   "Save the current sound over the selected user preset. For a factory preset, this asks for a new name. Shortcut Control+S." },
+        { &saveAsButton, "Save the current sound as a new user preset, with a name and an optional category. Shortcut Control+Shift+S." },
+        { &renameButton, "Rename the selected user preset or change its category." },
+        { &deleteButton, nullptr },
+        { &importButton, "Copy preset files, for example from a friend, into your user presets, then load the first one." },
+        { &exportButton, "Save the current sound as a preset file anywhere, to share it or keep a backup." },
+        { &folderButton, isMac ? "Open your user preset folder in Finder." : "Open your user preset folder in File Explorer." },
+    };
+    for (const auto& [button, help] : buttonInfo)
+    {
+        const auto text = help != nullptr ? juce::String (help)
+                                          : "Delete the selected user preset. It goes to the " + trash + ".";
+        button->setHelpText (text);
+        button->setTooltip (text);
+    }
+    prevButton.setTitle ("Previous preset");
+    nextButton.setTitle ("Next preset");
+    importButton.setTitle ("Import presets");
+    exportButton.setTitle ("Export preset");
+    folderButton.setTitle ("Open preset folder");
+    presetBox.setTooltip (presetBox.getHelpText());
+
+    prevButton.onClick   = [this] { stepPreset (-1); };
+    nextButton.onClick   = [this] { stepPreset (1); };
+    saveButton.onClick   = [this] { savePreset(); };
+    saveAsButton.onClick = [this] { showSaveDialog(); };
     renameButton.onClick = [this] { showRenameDialog(); };
     deleteButton.onClick = [this] { deleteCurrentPreset(); };
-    for (auto* b : { &saveButton, &renameButton, &deleteButton })
+    importButton.onClick = [this] { importPresets(); };
+    exportButton.onClick = [this] { exportPreset(); };
+    folderButton.onClick = [this] { openPresetFolder(); };
+    for (auto* b : { &saveButton, &saveAsButton, &renameButton, &deleteButton, &importButton, &exportButton, &folderButton })
         presetButtons.addAndMakeVisible (*b);
     presetSection.addRow (presetButtons, nullptr);
     refreshPresetBox();
 
+    // ---- Column 1: Glide, Pitch ----
     auto& glide = addSection ("Glide", 0);
     for (auto id : { ids::glideMode, ids::glideTime, ids::glideSync, ids::glideTiming, ids::glideCurve,
                      ids::slideRetrigger, ids::notePriority })
@@ -261,6 +402,7 @@ Access808Editor::Access808Editor (Access808Processor& p)
         addParameter (mix, id);
     duckCheckButton.setHelpText ("Says whether kick audio is reaching the sidechain input and how much the 808 is ducked. "
                                  "Play the kick, then press this.");
+    duckCheckButton.setTooltip (duckCheckButton.getHelpText());
     duckCheckButton.onClick = [this] { speakDuckStatus(); };
     mix.addRow (duckCheckButton, nullptr);
 
@@ -275,7 +417,10 @@ Access808Editor::Access808Editor (Access808Processor& p)
     themeBox.addItem ("High contrast", 2);
     settingsSection.addRow (sizeBox, &makeLabel ("Window Size"));
     settingsSection.addRow (themeBox, &makeLabel ("Theme"));
+    sizeBox.setTooltip (sizeBox.getHelpText());
+    themeBox.setTooltip (themeBox.getHelpText());
     helpButton.setHelpText ("Speaks what the last focused control does. F1 does the same from any control.");
+    helpButton.setTooltip (helpButton.getHelpText());
     helpButton.onClick = [this] { speakFocusedHelp(); };
     settingsSection.addRow (helpButton, nullptr);
 
@@ -360,6 +505,7 @@ void Access808Editor::addParameter (ui::Section& section, const char* paramId)
         box->addItemList (choice->choices, 1);
         box->setTitle (name);
         box->setHelpText (help);
+        box->setTooltip (help);
         c.comboAttachment = std::make_unique<ComboAttachment> (processor.apvts, paramId, *box);
         c.component = std::move (box);
     }
@@ -367,14 +513,19 @@ void Access808Editor::addParameter (ui::Section& section, const char* paramId)
     {
         auto slider = std::make_unique<ui::AccessibleSlider>();
         slider->setTitle (name);
-        slider->setHelpText (help);
+        slider->setHelp (help);
         if (juce::String (paramId) == ids::glideTime)
             glideTimeSlider = slider.get();
         c.sliderAttachment = std::make_unique<SliderAttachment> (processor.apvts, paramId, *slider);
+        // Double-click (or Alt+click) goes back to the parameter's default.
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+            slider->setDoubleClickReturnValue (true, ranged->convertFrom0to1 (ranged->getDefaultValue()));
         c.component = std::move (slider);
     }
 
-    section.addRow (*c.component, &makeLabel (name));
+    auto& label = makeLabel (name);
+    label.setTooltip (dynamic_cast<juce::SettableTooltipClient*> (c.component.get())->getTooltip());
+    section.addRow (*c.component, &label);
     controls.push_back (std::move (c));
 }
 
@@ -414,6 +565,113 @@ void Access808Editor::loadPresetFromBox()
     // The screen reader already reads the new list item, so only errors are announced.
     if (error.isNotEmpty())
         ui::announce (error, true);
+}
+
+void Access808Editor::stepPreset (int delta)
+{
+    const int n = (int) processor.presets.getEntries().size();
+    if (n == 0)
+        return;
+
+    const int current = presetBox.getSelectedItemIndex();
+    const int next = current < 0 ? (delta > 0 ? 0 : n - 1) : (current + delta + n) % n;
+    presetBox.setSelectedItemIndex (next, juce::sendNotificationSync); // loads it
+    // Focus stays on the button, so the screen reader doesn't read the list.
+    ui::announce (presetBox.getText());
+}
+
+void Access808Editor::savePreset()
+{
+    const auto& entries = processor.presets.getEntries();
+    const int idx = presetBox.getSelectedItemIndex();
+    if (! juce::isPositiveAndBelow (idx, (int) entries.size()) || entries[(size_t) idx].isFactory())
+    {
+        showSaveDialog(); // a factory preset or a changed sound with no user preset: ask for a name
+        return;
+    }
+
+    const auto error = processor.presets.saveOver (idx);
+    refreshPresetBox();
+    ui::announce (error.isEmpty() ? "Saved " + processor.presets.getCurrentName() : error, error.isNotEmpty());
+}
+
+void Access808Editor::importPresets()
+{
+    fileChooser = std::make_unique<juce::FileChooser> ("Import Access808 presets",
+                                                       juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+                                                       juce::String ("*") + PresetManager::extension);
+    juce::Component::SafePointer<Access808Editor> safeThis (this);
+    fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::canSelectMultipleItems,
+                              [safeThis] (const juce::FileChooser& chooser)
+    {
+        if (safeThis == nullptr)
+            return;
+        safeThis->importButton.grabKeyboardFocus();
+
+        const auto files = chooser.getResults();
+        if (files.isEmpty())
+        {
+            ui::announce ("Import cancelled");
+            return;
+        }
+
+        const auto result = safeThis->processor.presets.importFiles (files);
+        safeThis->refreshPresetBox();
+
+        juce::String text;
+        if (result.imported > 0)
+        {
+            const int idx = safeThis->processor.presets.indexOfDisplayName (result.firstDisplayName);
+            if (idx >= 0)
+                safeThis->presetBox.setSelectedItemIndex (idx, juce::sendNotificationSync);
+            text << "Imported " << result.imported << (result.imported == 1 ? " preset" : " presets")
+                 << ". Loaded " << result.firstDisplayName << ".";
+        }
+        if (! result.failed.isEmpty())
+            text << (text.isEmpty() ? "" : " ") << "Not an Access808 preset, skipped: "
+                 << result.failed.joinIntoString (", ") << ".";
+        ui::announce (text, result.imported == 0);
+    });
+}
+
+void Access808Editor::exportPreset()
+{
+    const auto start = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                           .getChildFile (processor.presets.getExportName() + PresetManager::extension);
+    fileChooser = std::make_unique<juce::FileChooser> ("Export the current sound as a preset file", start,
+                                                       juce::String ("*") + PresetManager::extension);
+    juce::Component::SafePointer<Access808Editor> safeThis (this);
+    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [safeThis] (const juce::FileChooser& chooser)
+    {
+        if (safeThis == nullptr)
+            return;
+        safeThis->exportButton.grabKeyboardFocus();
+
+        auto file = chooser.getResult();
+        if (file == juce::File())
+        {
+            ui::announce ("Export cancelled");
+            return;
+        }
+        if (! file.hasFileExtension (PresetManager::extension))
+            file = file.withFileExtension (PresetManager::extension);
+
+        const auto error = safeThis->processor.presets.exportTo (file);
+        ui::announce (error.isEmpty() ? "Exported " + file.getFileName() + " to " + file.getParentDirectory().getFullPathName()
+                                      : error,
+                      error.isNotEmpty());
+    });
+}
+
+void Access808Editor::openPresetFolder()
+{
+    // Opens File Explorer or Finder, which the screen reader reads by itself.
+    const auto dir = PresetManager::getUserPresetDirectory();
+    if (! dir.createDirectory() || ! dir.startAsProcess())
+        ui::announce ("Could not open the preset folder " + dir.getFullPathName() + ".", true);
 }
 
 void Access808Editor::showNameDialog (const juce::String& title, const juce::String& name, const juce::String& category,
@@ -494,7 +752,8 @@ void Access808Editor::deleteCurrentPreset()
     const auto displayName = entries[(size_t) idx].displayName;
     juce::Component::SafePointer<Access808Editor> safeThis (this);
     juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::QuestionIcon, "Delete preset",
-                                        "Delete " + displayName + "? It goes to the Recycle Bin.",
+                                        "Delete " + displayName + "? It goes to the "
+                                            + juce::String (isMac ? "Trash." : "Recycle Bin."),
                                         "Delete", "Cancel", this,
                                         juce::ModalCallbackFunction::create ([safeThis, idx, displayName] (int result)
     {
@@ -518,9 +777,14 @@ bool Access808Editor::keyPressed (const juce::KeyPress& key)
         speakFocusedHelp();
         return true;
     }
-    if (key == juce::KeyPress ('s', juce::ModifierKeys::ctrlModifier, 0))
+    if (key == juce::KeyPress ('s', juce::ModifierKeys::ctrlModifier | juce::ModifierKeys::shiftModifier, 0))
     {
         showSaveDialog();
+        return true;
+    }
+    if (key == juce::KeyPress ('s', juce::ModifierKeys::ctrlModifier, 0))
+    {
+        savePreset();
         return true;
     }
     return false;
@@ -572,7 +836,7 @@ void Access808Editor::speakFocusedHelp()
     {
         speak ("Move to a control first, then press F1 for its help. "
                "Arrow keys change a value, Page Up and Page Down in big steps, Home and End go to the ends, "
-               "Enter or F2 types an exact value. Control+S saves a preset.", true);
+               "Enter or F2 types an exact value. Control+S saves the preset, Control+Shift+S saves it under a new name.", true);
         return;
     }
 
@@ -649,6 +913,11 @@ void Access808Editor::applyTheme()
     lf.setColour (juce::TextEditor::textColourId, theme.text);
     lf.setColour (juce::AlertWindow::backgroundColourId, theme.background);
     lf.setColour (juce::AlertWindow::textColourId, theme.text);
+    lf.setColour (juce::TooltipWindow::backgroundColourId, theme.control);
+    lf.setColour (juce::TooltipWindow::textColourId, theme.text);
+    lf.setColour (juce::TooltipWindow::outlineColourId, theme.accent);
+    titleLabel.setColour (juce::Label::textColourId, theme.accent);
+    hintLabel.setColour (juce::Label::textColourId, theme.text.withAlpha (0.75f));
 
     for (auto& c : controls)
         c.component->sendLookAndFeelChange();
@@ -658,26 +927,53 @@ void Access808Editor::applyTheme()
 
 void Access808Editor::layoutContent()
 {
+    contentWidth = margin + numColumns * (columnWidth + margin);
+    const int innerWidth = contentWidth - 2 * margin;
+
+    // Header line, then full-width sections, then the columns below them.
+    auto header = juce::Rectangle<int> (margin, margin / 2, innerWidth, headerHeight);
+    titleLabel.setBounds (header.removeFromLeft (260));
+    hintLabel.setBounds (header);
+
+    int top = margin / 2 + headerHeight + margin / 2;
+    for (size_t i = 0; i < sections.size(); ++i)
+    {
+        if (sectionColumns[i] != fullWidth)
+            continue;
+        const int h = sections[i]->getPreferredHeight();
+        sections[i]->setBounds (margin, top, innerWidth, h);
+        top += h + margin;
+    }
+
     std::array<int, numColumns> y {};
-    y.fill (margin);
+    y.fill (top);
 
     for (size_t i = 0; i < sections.size(); ++i)
     {
         const int col = sectionColumns[i];
+        if (col == fullWidth)
+            continue;
         const int h = sections[i]->getPreferredHeight();
         sections[i]->setBounds (margin + col * (columnWidth + margin), y[(size_t) col], columnWidth, h);
         y[(size_t) col] += h + margin;
     }
 
-    contentWidth = margin + numColumns * (columnWidth + margin);
     contentHeight = *std::max_element (y.begin(), y.end());
     content.setBounds (0, 0, contentWidth, contentHeight);
 
+    // Preset row: the list, then Previous and Next.
+    auto row = presetRow.getLocalBounds();
+    nextButton.setBounds (row.removeFromRight (110).reduced (2, 0));
+    prevButton.setBounds (row.removeFromRight (110).reduced (2, 0));
+    presetBox.setBounds (row.withTrimmedRight (6));
+
+    // Buttons, evenly spread.
     auto b = presetButtons.getLocalBounds();
-    const int w = b.getWidth() / 3;
-    saveButton.setBounds (b.removeFromLeft (w).reduced (2, 0));
-    renameButton.setBounds (b.removeFromLeft (w).reduced (2, 0));
-    deleteButton.setBounds (b.reduced (2, 0));
+    juce::TextButton* buttons[] = { &saveButton, &saveAsButton, &renameButton, &deleteButton,
+                                    &importButton, &exportButton, &folderButton };
+    const int w = b.getWidth() / (int) std::size (buttons);
+    for (auto* button : buttons)
+        button->setBounds (b.removeFromLeft (w).reduced (2, 0));
 }
 
 void Access808Editor::applyScale()
@@ -704,6 +1000,10 @@ void Access808Editor::globalFocusChanged (juce::Component* focused)
     // Remembered for F1 and the help button (which takes focus itself).
     if (focused != nullptr && content.isParentOf (focused) && focused != &helpButton)
         lastFocusedControl = focused;
+
+    // Move the focus ring (drawn by the sections).
+    for (auto& s : sections)
+        s->repaint();
 
     // Keep the focused control visible when the window is scaled and scrolls.
     if (focused == nullptr || ! content.isParentOf (focused))

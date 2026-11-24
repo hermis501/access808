@@ -191,6 +191,59 @@ TEST_CASE ("State and factory presets round-trip")
     REQUIRE (q->presets.getCurrentName() == p->presets.getCurrentName());
 }
 
+TEST_CASE ("User presets save over, export and import without overwriting")
+{
+    // A throwaway user folder, so the real presets are never touched.
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                         .getChildFile ("Access808PresetTest").getNonexistentSibling();
+    PresetManager::setUserPresetDirectoryForTests (dir);
+    struct Restore { juce::File d; ~Restore() { PresetManager::setUserPresetDirectoryForTests ({}); d.deleteRecursively(); } } restore { dir };
+
+    auto p = makeProcessor();
+    auto& pm = p->presets;
+    auto glideTime = [&] { return p->apvts.getRawParameterValue (ids::glideTime)->load(); };
+
+    setParam (*p, ids::glideTime, 200.0f);
+    REQUIRE (pm.saveUser ("My 808", "Bass").isEmpty());
+    const int idx = pm.indexOfDisplayName ("User - Bass - My 808");
+    REQUIRE (idx >= 0);
+
+    // Save writes over the selected user preset; factory presets refuse.
+    setParam (*p, ids::glideTime, 400.0f);
+    REQUIRE (pm.saveOver (idx).isEmpty());
+    REQUIRE (pm.saveOver (0).isNotEmpty());
+    setParam (*p, ids::glideTime, 50.0f);
+    REQUIRE (pm.load (pm.indexOfDisplayName ("User - Bass - My 808")).isEmpty());
+    REQUIRE (glideTime() == 400.0f);
+    REQUIRE (pm.getExportName() == "My 808");
+
+    // Export anywhere, then import it twice: the second copy gets a number.
+    const auto exported = dir.getSiblingFile (dir.getFileName() + " export").getChildFile ("Shared 808.a808preset");
+    struct RemoveExport { juce::File f; ~RemoveExport() { f.getParentDirectory().deleteRecursively(); } } removeExport { exported };
+    REQUIRE (pm.exportTo (exported).isEmpty());
+    REQUIRE (exported.existsAsFile());
+
+    auto first = pm.importFiles ({ exported });
+    REQUIRE (first.imported == 1);
+    REQUIRE (first.firstDisplayName == "User - Shared 808");
+    auto second = pm.importFiles ({ exported });
+    REQUIRE (second.imported == 1);
+    REQUIRE (second.firstDisplayName == "User - Shared 808 (2)");
+    REQUIRE (pm.indexOfDisplayName ("User - Shared 808") >= 0);
+    REQUIRE (pm.indexOfDisplayName ("User - Shared 808 (2)") >= 0);
+
+    // A file that is not an Access808 preset is skipped and named.
+    const auto junk = exported.getSiblingFile ("notes.a808preset");
+    REQUIRE (junk.replaceWithText ("<NotAPreset/>"));
+    auto bad = pm.importFiles ({ junk });
+    REQUIRE (bad.imported == 0);
+    REQUIRE (bad.failed == juce::StringArray { "notes.a808preset" });
+
+    setParam (*p, ids::glideTime, 50.0f);
+    REQUIRE (pm.load (pm.indexOfDisplayName ("User - Shared 808 (2)")).isEmpty());
+    REQUIRE (glideTime() == 400.0f);
+}
+
 TEST_CASE ("Every factory preset renders cleanly")
 {
     const int count = (int) getFactoryPresets().size();
@@ -205,6 +258,21 @@ TEST_CASE ("Every factory preset renders cleanly")
         REQUIRE (r.peak() < 2.0f);
         REQUIRE (r.peak() > 0.01f);
     }
+}
+
+// Hidden (run it by name): saves a picture of the editor, to check the layout
+// without opening a host. Writes Access808-editor.png in the temp folder.
+TEST_CASE ("Editor snapshot", "[.snapshot]")
+{
+    auto p = makeProcessor();
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p->createEditor());
+    REQUIRE (editor != nullptr);
+    const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Access808-editor.png");
+    file.deleteFile();
+    juce::FileOutputStream out (file);
+    REQUIRE (juce::PNGImageFormat().writeImageToStream (image, out));
+    WARN ("Saved " << file.getFullPathName() << " (" << editor->getWidth() << " x " << editor->getHeight() << ")");
 }
 
 int main (int argc, char* argv[])
