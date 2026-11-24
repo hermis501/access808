@@ -1,0 +1,237 @@
+name: Build
+
+# Builds the plugin on Windows and macOS, runs the Catch2 suites on both,
+# checks the manufacturer name survived the build, validates the plugin with
+# pluginval (and the macOS AU with auval), and uploads the installers
+# (Windows .exe, macOS .pkg) plus zipped bundles as downloadable artifacts.
+#
+# Pushing a tag such as v0.1.0 also publishes a GitHub release with both
+# platforms' files, using that version's section of CHANGELOG.md as notes.
+# The tag must match the project(Access808 VERSION ...) line.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JUCE_VERSION: "8.0.15"
+  CATCH2_VERSION: "v3.5.4"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            # Universal binary: native on Apple Silicon and Intel Macs.
+            # Quoted: an unquoted ";" would split the bash command in two.
+            cmake_args: >-
+              -DCMAKE_BUILD_TYPE=Release
+              "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          - name: Windows
+            os: windows-latest
+            cmake_args: ""
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      # JUCE and Catch2 are not in the repo. Clone them into the workspace and
+      # pass relative :PATH values - CMake makes those absolute against the
+      # working directory, which sidesteps Windows-vs-POSIX path spelling.
+      # JUCE is cloned with LF endings so the patch applies on every runner.
+      # The patch makes the VST3 Unicode class info carry the vendor name's
+      # c with caron intact (stock JUCE widens each UTF-8 byte on its own).
+      - name: Fetch JUCE and Catch2
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone --depth 1 --branch "$JUCE_VERSION" https://github.com/juce-framework/JUCE.git _sdk/JUCE
+          git -C _sdk/JUCE apply "$PWD/patches/juce-vst3-utf16-vendor.patch"
+          git clone --depth 1 --branch "$CATCH2_VERSION" https://github.com/catchorg/Catch2.git _sdk/Catch2
+
+      - name: Configure
+        shell: bash
+        run: >-
+          cmake -S . -B build
+          -DACCESS808_JUCE_DIR:PATH=_sdk/JUCE
+          -DACCESS808_CATCH2_DIR:PATH=_sdk/Catch2
+          ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Read version
+        shell: bash
+        run: |
+          ver=$(sed -nE 's/^project\(Access808 VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          echo "ACCESS808_VERSION=$ver" >> "$GITHUB_ENV"
+
+      # The manufacturer name has a non-ASCII letter; fail if any build step
+      # mangled it (moduleinfo.json, and on Windows the plugin's own reports).
+      - name: Check manufacturer name
+        shell: bash
+        run: |
+          py=python3; command -v python3 >/dev/null || py=python
+          "$py" tests/check_vst3_vendor.py build/Access808_artefacts/Release/VST3/Access808.vst3
+
+      # pluginval loads the plugin the way a host does and hammers it: state
+      # save/restore with random values, parameter fuzzing, bus layouts,
+      # threading, editor open/close. Strictness 10 is its maximum.
+      - name: Validate (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath _pluginval
+          New-Item -ItemType Directory -Force pluginval-log | Out-Null
+          # pluginval is a GUI-subsystem exe: it writes nothing to the console,
+          # so wait on the process and print the log it leaves in --output-dir.
+          $p = Start-Process -FilePath _pluginval/pluginval.exe -Wait -PassThru -ArgumentList @(
+                 '--strictness-level', '10', '--validate-in-process',
+                 '--output-dir', 'pluginval-log',
+                 '--validate', 'build/Access808_artefacts/Release/VST3/Access808.vst3')
+          Get-ChildItem pluginval-log | ForEach-Object { Get-Content $_.FullName }
+          if ($p.ExitCode -ne 0) { throw "pluginval failed with exit code $($p.ExitCode)" }
+
+      - name: Validate (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          ditto -x -k pluginval.zip _pluginval
+          out=build/Access808_artefacts/Release
+          # No display on the runner, so skip the editor tests there; Windows
+          # covers them.
+          _pluginval/pluginval.app/Contents/MacOS/pluginval \
+            --strictness-level 10 --validate-in-process --skip-gui-tests \
+            --validate "$out/VST3/Access808.vst3"
+          # Logic only loads AUs that pass Apple's auval.
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          ditto "$out/AU/Access808.component" ~/Library/Audio/Plug-Ins/Components/Access808.component
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -strict -v aumu A808 Acs8
+
+      # Bundles are zipped before upload: upload-artifact does not preserve the
+      # symlinks and exec bits a macOS bundle relies on, but ditto does.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=build/Access808_artefacts/Release
+          mkdir -p package
+          for bundle in "$out/VST3/Access808.vst3" "$out/AU/Access808.component"; do
+            # Ad-hoc signature. Not a Developer ID - Gatekeeper will still
+            # quarantine a downloaded copy - but arm64 refuses unsigned code.
+            codesign --force --deep --sign - "$bundle"
+          done
+          ditto -c -k --keepParent "$out/VST3/Access808.vst3"    "package/Access808-$ACCESS808_VERSION-macOS-VST3.zip"
+          ditto -c -k --keepParent "$out/AU/Access808.component" "package/Access808-$ACCESS808_VERSION-macOS-AU.zip"
+
+          # Installer package: both formats into the system plug-in folders.
+          root=pkgroot
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$root/Library/Audio/Plug-Ins/Components"
+          ditto "$out/VST3/Access808.vst3"    "$root/Library/Audio/Plug-Ins/VST3/Access808.vst3"
+          ditto "$out/AU/Access808.component" "$root/Library/Audio/Plug-Ins/Components/Access808.component"
+          # Bundles are "relocatable" by default: Installer would update a copy
+          # it finds elsewhere on disk instead of installing where hosts look.
+          # Newer pkgbuild versions leave the key out of the analysis, so add
+          # it where Set finds nothing.
+          pkgbuild --analyze --root "$root" components.plist
+          i=0
+          while /usr/libexec/PlistBuddy -c "Print :$i" components.plist >/dev/null 2>&1; do
+            /usr/libexec/PlistBuddy -c "Set :$i:BundleIsRelocatable false" components.plist 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :$i:BundleIsRelocatable bool false" components.plist
+            i=$((i+1))
+          done
+          plutil -p components.plist
+          pkgbuild --root "$root" --component-plist components.plist \
+                   --identifier com.access808.plugins --version "$ACCESS808_VERSION" \
+                   --install-location / Access808-plugins.pkg
+          productbuild --package Access808-plugins.pkg "package/Access808-$ACCESS808_VERSION-macOS.pkg"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Compress-Archive -Path build/Access808_artefacts/Release/VST3/Access808.vst3 `
+                           -DestinationPath "package/Access808-$env:ACCESS808_VERSION-Windows-VST3.zip"
+
+          # Inno Setup ships on the hosted Windows image; install it if a newer
+          # image drops it.
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          & $iscc /Q "/DAppVersion=$env:ACCESS808_VERSION" `
+                  "/DVst3Dir=$PWD\build\Access808_artefacts\Release\VST3\Access808.vst3" `
+                  "/DOutputDir=$PWD\package" installer\Access808.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Upload
+        uses: actions/upload-artifact@v5
+        with:
+          name: Access808-${{ matrix.name }}
+          path: |
+            package/*.zip
+            package/*.exe
+            package/*.pkg
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          project=$(sed -nE 's/^project\(Access808 VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          if [ "$ver" != "$project" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match project version $project" >&2
+            exit 1
+          fi
+          # Notes: this version's CHANGELOG section, without its heading.
+          awk -v v="$ver" '
+            /^## / { if (found) exit; if ($2 == v) { found = 1; next } }
+            found' CHANGELOG.md > notes.md
+          test -s notes.md
+          # The REAPER scripts on their own, for macOS and for manual installs.
+          (cd ReaScripts && zip -q "../artifacts/Access808-$ver-REAPER-scripts.zip" *.lua)
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Access808 $ver" \
+            --notes-file notes.md \
+            --latest

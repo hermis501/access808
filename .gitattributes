@@ -1,0 +1,7 @@
+* text=auto
+
+# The user's build script is read by cmd.exe and keeps Windows line endings.
+*.bat text eol=crlf
+
+# Applied to a JUCE clone with git apply; keep the bytes exactly as committed.
+*.patch -text

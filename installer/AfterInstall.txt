@@ -1,0 +1,22 @@
+Access808 is installed.
+
+The plugin
+In REAPER, add Access808 to a track as an instrument, for example from the FX browser. If REAPER doesn't list it, choose Options, Preferences, Plug-ins, VST, then Re-scan.
+
+Making slides
+Glide Mode is Legato by default. A note that starts while the previous note is still held slides to the new pitch.
+
+If you installed the REAPER scripts, these actions are in the Actions list, in the main section and in the MIDI editor section:
+- Custom: Access808 - Slide selected notes into next note
+- Custom: Access808 - Remove slide from selected notes
+- Custom: Access808 - Set slide overlap
+
+Select notes, run "Slide selected notes into next note", and each selected note slides into the note after it. OSARA reports what changed. You can give these actions keyboard shortcuts in the Actions list.
+
+Kick ducking
+Make a send from the kick track to the Access808 track, then raise Duck Amount.
+
+Controls
+All controls are in OSARA's FX parameter list. The plugin window also works with a screen reader: Tab between controls, use the arrow keys to change values, and press Enter to type a value.
+
+The full manual is in the Start menu under Access808.

@@ -1,0 +1,25 @@
+# CMake build trees (fully regenerable)
+build/
+out/
+CMakeUserPresets.json
+
+# IDE / OS clutter
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# SDKs cloned into the workspace by CI
+_sdk/
+
+# Per-machine Claude Code permissions
+.claude/settings.local.json
+
+# Locally built installers and packages (CI builds the released ones)
+package/
+
+# Personal launchers
+claude_start.bat
+claude_resume.bat
