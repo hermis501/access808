@@ -17,7 +17,7 @@ The user asks questions as numbered plain-text lists, not through dialog tools. 
 
 ## Commands
 
-External dependencies live outside the repo: JUCE 8.0.15 at `C:/_tools/JUCE` (`-DACCESS808_JUCE_DIR=`), Catch2 at `C:/_tools/Catch2-3.5.4` (`-DACCESS808_CATCH2_DIR=`), and pluginval at `C:/_tools/pluginval.exe`. The local JUCE already carries `patches/juce-vst3-utf16-vendor.patch`; CI clones stock JUCE and applies it.
+External dependencies live outside the repo: JUCE 8.0.15 at `C:/_tools/JUCE` (`-DACCESS808_JUCE_DIR=`), Catch2 at `C:/_tools/Catch2-3.5.4` (`-DACCESS808_CATCH2_DIR=`), and pluginval at `C:/_tools/pluginval.exe`. The local JUCE already carries `patches/juce-vst3-utf16-vendor.patch`; CI clones stock JUCE and applies it. JUCE stores that header with CRLF, so the patch body lines are CRLF too: keep them, or `git apply` fails on macOS.
 
 ```sh
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64          # configure (first run ~1.5 min)
